@@ -1,0 +1,23 @@
+[package]
+name = "mauth-client-rust"
+version = "0.1.0"
+authors = ["Mason Gup <mgup@mdsol.com>"]
+edition = "2018"
+
+[dependencies]
+ring = "*"
+hyper = "*"
+hyper-tls = "*"
+serde_json = "*"
+serde_yaml = "*"
+serde = { version = "*", features = ["derive"] }
+uuid = { version = "*", features = ["v4"] }
+dirs = "*"
+base64 = "*"
+chrono = "*"
+percent-encoding = "*"
+tokio = { version = "*", features = ["fs"] }
+sha2 = "*"
+bytes = "*"
+hex = "*"
+openssl = "*"
