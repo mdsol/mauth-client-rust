@@ -4,21 +4,22 @@ version = "0.1.0"
 authors = ["Mason Gup <mgup@mdsol.com>"]
 edition = "2018"
 license-file = "LICENSE.txt"
+description = "Sign requests and validate responses using the Medidata MAuth protocol"
 
 [dependencies]
-ring = "*"
-hyper = "*"
-hyper-tls = "*"
-serde_json = "*"
-serde_yaml = "*"
-serde = { version = "*", features = ["derive"] }
-uuid = { version = "*", features = ["v4"] }
-dirs = "*"
-base64 = "*"
-chrono = "*"
-percent-encoding = "*"
-tokio = { version = "*", features = ["fs"] }
-sha2 = "*"
-bytes = "*"
-hex = "*"
-openssl = "*"
+ring = ">= 0.16.0"
+hyper = ">= 0.13.0"
+hyper-tls = ">= 0.4.0"
+serde = { version = ">= 1.0.85", features = ["derive"] }
+serde_json = ">= 1.0.0"
+serde_yaml = ">= 0.8.0"
+uuid = { version = ">= 0.8.0", features = ["v4"] }
+dirs = ">= 2.0.0"
+base64 = ">= 0.10.0"
+chrono = ">= 0.4.0"
+percent-encoding = ">= 2.0.0"
+tokio = { version = ">= 0.2.0", features = ["fs"] }
+sha2 = ">= 0.8.0"
+bytes = "*" #No version needed as many other crates depend on it as well
+hex = ">= 0.4.0"
+openssl = ">= 0.10.0"
