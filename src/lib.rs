@@ -1,5 +1,31 @@
-#![allow(dead_code)]
-
+//! # mauth-client-rust
+//!
+//! This crate allows users of the Hyper crate for making HTTP requests to sign those requests with
+//! the MAuth protocol, and verify the responses. Usage example:
+//!
+//! ```no_run
+//! # use mauth_client_rust::MAuthInfo;
+//! # use hyper::{Body, Client, Method, Request, Response};
+//! # use hyper_tls::HttpsConnector;
+//! # async fn make_signed_request() {
+//! let mauth_info = MAuthInfo::from_default_file().await.unwrap();
+//! let https = HttpsConnector::new();
+//! let client = Client::builder().build::<_, hyper::Body>(https);
+//! let uri: hyper::Uri = "https://www.example.com/".parse().unwrap();
+//! let (body, body_digest) = MAuthInfo::build_body_with_digest("".to_string());
+//! let mut req = Request::new(body);
+//! *req.method_mut() = Method::GET;
+//! *req.uri_mut() = uri.clone();
+//! mauth_info.sign_request_v2(&mut req, body_digest);
+//! match client.request(req).await {
+//!     Err(err) => println!("Got error {}", err),
+//!     Ok(response) => match mauth_info.validate_response_v2(response).await {
+//!         Ok(resp_body) => println!("Got validated response body {}", &resp_body),
+//!         Err(err) => println!("Error validating response: {:?}", err),
+//!     }
+//! }
+//! # }
+//! ```
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -23,6 +49,11 @@ use openssl::rsa::{Padding, Rsa};
 
 const CONFIG_FILE: &str = ".mauth_config.yml";
 
+/// This is the primary struct of this class. It contains all of the information
+/// required to sign requests using the MAuth protocol and verify the responses.
+///
+/// Note that it contains a cache of response keys for verifying response signatures. This cache
+/// makes the struct non-Sync.
 pub struct MAuthInfo {
     app_id: Uuid,
     private_key: RsaKeyPair,
@@ -40,6 +71,10 @@ struct ConfigFileSection {
 }
 
 impl MAuthInfo {
+    /// Construct the MAuthInfo struct based on the contents of the config file `.mauth_config.yml`
+    /// present in the current user's home directory. Currently returns a string error in case of
+    /// any failures in loading the file or processing the URL, UUID, or private key specified in
+    /// it.
     pub async fn from_default_file() -> Result<MAuthInfo, String> {
         let mut home = dirs::home_dir().unwrap();
         home.push(CONFIG_FILE);
@@ -80,12 +115,27 @@ impl MAuthInfo {
         })
     }
 
+    /// The MAuth Protocol requires computing a digest of the full text body of the request to be
+    /// sent. This is incompatible with the Hyper crate's structs, which do not allow the body of a
+    /// constructed Request to be read. To solve this, use this function to compute both the body to
+    /// be used to build the Request struct, and the digest to be passed to the
+    /// [`sign_request_v2`](#method.sign_request_v2) function.
+    ///
+    /// Note that this method must be used with all empty-body requests, including GET requests.
     pub fn build_body_with_digest(body: String) -> (Body, String) {
         let mut hasher = Sha512::default();
         hasher.input(body.as_bytes());
         (Body::from(body), hex::encode(hasher.result()))
     }
 
+    /// Sign a provided request using the MAuth V2 protocol. The signature consists of 2 headers
+    /// containing both a timestamp and a signature string, and will be added to the headers of the
+    /// request. It is required to pass a `body_digest` computed by the
+    /// [`build_body_with_digest`](#method.build_body_with_digest) method, even if the request is
+    /// an empty-body GET.
+    ///
+    /// Note that, as the request signature includes a timestamp, the request must be sent out
+    /// shortly after the signature takes place.
     pub fn sign_request_v2(&self, req: &mut Request<Body>, body_digest: String) {
         let timestamp_str = Utc::now().timestamp().to_string();
         let encoded_query: String = req
@@ -141,6 +191,12 @@ impl MAuthInfo {
             .join("&")
     }
 
+    /// Sign a provided request using the MAuth V1 protocol. The signature consists of 2 headers
+    /// containing both a timestamp and a signature string, and will be added to the headers of the
+    /// request. It is required to pass a `body`, even if the request is an empty-body GET.
+    ///
+    /// Note that, as the request signature includes a timestamp, the request must be sent out
+    /// shortly after the signature takes place.
     pub fn sign_request_v1(&self, req: &mut Request<Body>, body: String) {
         let timestamp_str = Utc::now().timestamp().to_string();
         let string_to_sign = format!(
@@ -215,6 +271,12 @@ impl MAuthInfo {
         Ok(response_vec)
     }
 
+    /// Validate that a Hyper Response contains a valid MAuth V2 signature. Returns either the
+    /// validated response body, or an error with details on why the signature was invalid.
+    ///
+    /// This method is `async` because it may make a HTTP request to the MAuth server in order to
+    /// retrieve the public key for the application that signed the response. Application keys are
+    /// cached in the MAuth struct, so the request only needs to be made once.
     pub async fn validate_response_v2(
         &self,
         response: Response<Body>,
@@ -267,6 +329,14 @@ impl MAuthInfo {
         }
     }
 
+    /// Validate that a Hyper Response contains a valid MAuth V1 signature. Returns either the
+    /// validated response body, or an error with details on why the signature was invalid.
+    ///
+    /// **Warning, this method does not currently work correctly**
+    ///
+    /// This method is `async` because it may make a HTTP request to the MAuth server in order to
+    /// retrieve the public key for the application that signed the response. Application keys are
+    /// cached in the MAuth struct, so the request only needs to be made once.
     pub async fn validate_response_v1(
         &self,
         response: Response<Body>,
@@ -380,14 +450,24 @@ impl MAuthInfo {
     }
 }
 
+/// All of the possible errors that can take place when attempting to verify a response signature
 #[derive(Debug)]
 pub enum MAuthValidationError {
+    /// The timestamp of the response was either invalid or outside of the permitted
+    /// range
     InvalidTime,
+    /// The MAuth signature of the response was either missing or incorrectly formatted
     InvalidSignature,
+    /// The timestamp header of the response was missing
     NoTime,
+    /// The signature header of the response was missing
     NoSig,
+    /// An error occurred while attempting to retrieve part of the response body
     ResponseProblem,
+    /// The response body failed to parse
     InvalidBody,
+    /// Attempt to retrieve a key to verify the response failed
     KeyUnavailable,
+    /// The body of the response did not match the signature
     SignatureVerifyFailure,
 }
