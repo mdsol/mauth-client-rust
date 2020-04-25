@@ -3,6 +3,7 @@ name = "mauth-client-rust"
 version = "0.1.0"
 authors = ["Mason Gup <mgup@mdsol.com>"]
 edition = "2018"
+license-file = "LICENSE.txt"
 
 [dependencies]
 ring = "*"
