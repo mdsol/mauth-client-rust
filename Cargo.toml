@@ -5,6 +5,11 @@ authors = ["Mason Gup <mgup@mdsol.com>"]
 edition = "2018"
 license-file = "LICENSE.txt"
 description = "Sign requests and validate responses using the Medidata MAuth protocol"
+readme = "README.md"
+homepage = ""
+repository = ""
+keywords = ["security", "authentication", "web"]
+categories = ["authentication", "web-programming"]
 
 [dependencies]
 ring = ">= 0.16.0"
