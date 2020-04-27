@@ -6,8 +6,8 @@ edition = "2018"
 license-file = "LICENSE.txt"
 description = "Sign requests and validate responses using the Medidata MAuth protocol"
 readme = "README.md"
-homepage = ""
-repository = ""
+homepage = "https://github.com/mdsol/mauth-client-rust"
+repository = "https://github.com/mdsol/mauth-client-rust"
 keywords = ["security", "authentication", "web"]
 categories = ["authentication", "web-programming"]
 
