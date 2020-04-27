@@ -1,10 +1,10 @@
-//! # mauth-client-rust
+//! # mauth-client
 //!
 //! This crate allows users of the Hyper crate for making HTTP requests to sign those requests with
 //! the MAuth protocol, and verify the responses. Usage example:
 //!
 //! ```no_run
-//! # use mauth_client_rust::MAuthInfo;
+//! # use mauth_client::MAuthInfo;
 //! # use hyper::{Body, Client, Method, Request, Response};
 //! # use hyper_tls::HttpsConnector;
 //! # async fn make_signed_request() {
