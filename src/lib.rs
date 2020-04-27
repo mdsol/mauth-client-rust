@@ -26,6 +26,7 @@
 //! }
 //! # }
 //! ```
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -41,7 +42,7 @@ use ring::signature::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha512};
-use tokio::fs;
+use tokio::{fs, io};
 use uuid::Uuid;
 
 use openssl::pkey::{PKey, Private, Public};
@@ -62,70 +63,77 @@ pub struct MAuthInfo {
     remote_key_store: RefCell<HashMap<Uuid, Rsa<Public>>>,
 }
 
+/// This struct holds the digest information required to perform the signing operation. It is a
+/// custom struct to enforce the requirement that the
+/// [`build_body_with_digest`](#method.build_body_with_digest) function's output be passed to the
+/// signing methods.
+pub struct BodyDigest {
+    digest_str: String,
+    body_str: String,
+}
+
 #[derive(Deserialize)]
 struct ConfigFileSection {
     app_uuid: String,
     mauth_baseurl: String,
     mauth_api_version: String,
     private_key_file: String,
+    v2_only_sign_requests: Option<bool>,
+    v2_only_authenticate: Option<bool>,
 }
 
 impl MAuthInfo {
     /// Construct the MAuthInfo struct based on the contents of the config file `.mauth_config.yml`
-    /// present in the current user's home directory. Currently returns a string error in case of
-    /// any failures in loading the file or processing the URL, UUID, or private key specified in
-    /// it.
-    pub async fn from_default_file() -> Result<MAuthInfo, String> {
+    /// present in the current user's home directory. Returns an enum error type that includes the
+    /// error types of all crates used.
+    pub async fn from_default_file() -> Result<MAuthInfo, ConfigReadError> {
         let mut home = dirs::home_dir().unwrap();
         home.push(CONFIG_FILE);
-        let config_data = fs::read(&home)
-            .await
-            .map_err(|_| "Couldn't open config file")?;
+        let config_data = fs::read(&home).await?;
 
-        let section: ConfigFileSection = serde_yaml::from_slice::<serde_yaml::Value>(&config_data)
-            .ok()
-            .and_then(|config| {
-                config
-                    .get("common")
-                    .and_then(|section| serde_yaml::from_value(section.clone()).ok())
-            })
-            .ok_or("Invalid config file format")?;
+        let config_data_value: serde_yaml::Value = serde_yaml::from_slice(&config_data)?;
+        let common_section = config_data_value
+            .get("common")
+            .ok_or(ConfigReadError::InvalidFile(None))?;
+        let common_section_typed: ConfigFileSection =
+            serde_yaml::from_value(common_section.clone())?;
 
         let full_uri: hyper::Uri = format!(
             "{}/mauth/{}/security_tokens/",
-            &section.mauth_baseurl, &section.mauth_api_version
+            &common_section_typed.mauth_baseurl, &common_section_typed.mauth_api_version
         )
-        .parse()
-        .map_err(|_| "Invalid config file format")?;
+        .parse()?;
 
-        let pk_data = fs::read(&section.private_key_file)
-            .await
-            .map_err(|_| "Couldn't open key file")?;
-        let openssl_key = PKey::private_key_from_pem(&pk_data)
-            .map_err(|e| format!("OpenSSL Key Load Error: {}", e))?;
-        let der_key_data = openssl_key.private_key_to_der().unwrap();
+        let pk_data = fs::read(&common_section_typed.private_key_file).await?;
+        let openssl_key = PKey::private_key_from_pem(&pk_data)?;
+        let der_key_data = openssl_key.private_key_to_der()?;
 
         Ok(MAuthInfo {
-            app_id: Uuid::parse_str(&section.app_uuid)
-                .map_err(|_| "UUID from config file was bad")?,
+            app_id: Uuid::parse_str(&common_section_typed.app_uuid)?,
             mauth_uri_base: full_uri,
             remote_key_store: RefCell::new(HashMap::new()),
-            private_key: RsaKeyPair::from_der(&der_key_data).map_err(|_| "Invalid private key")?,
-            openssl_private_key: openssl_key.rsa().map_err(|_| "Invalid private key")?,
+            private_key: RsaKeyPair::from_der(&der_key_data)?,
+            openssl_private_key: openssl_key.rsa()?,
         })
     }
 
     /// The MAuth Protocol requires computing a digest of the full text body of the request to be
     /// sent. This is incompatible with the Hyper crate's structs, which do not allow the body of a
     /// constructed Request to be read. To solve this, use this function to compute both the body to
-    /// be used to build the Request struct, and the digest to be passed to the
+    /// be used to build the Request struct, and the digest struct to be passed to the
     /// [`sign_request_v2`](#method.sign_request_v2) function.
     ///
     /// Note that this method must be used with all empty-body requests, including GET requests.
-    pub fn build_body_with_digest(body: String) -> (Body, String) {
+    pub fn build_body_with_digest(body: String) -> (Body, BodyDigest) {
         let mut hasher = Sha512::default();
         hasher.input(body.as_bytes());
-        (Body::from(body), hex::encode(hasher.result()))
+        (
+            Body::from(body.clone()),
+            BodyDigest {
+                digest_str: hex::encode(hasher.result()),
+                body_str: body,
+            },
+        )
     }
 
     /// Sign a provided request using the MAuth V2 protocol. The signature consists of 2 headers
@@ -136,7 +144,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v2(&self, req: &mut Request<Body>, body_digest: String) {
+    pub fn sign_request_v2(&self, req: &mut Request<Body>, body_digest: BodyDigest) {
         let timestamp_str = Utc::now().timestamp().to_string();
         let encoded_query: String = req
             .uri()
@@ -146,7 +154,7 @@ impl MAuthInfo {
             "{}\n{}\n{}\n{}\n{}\n{}",
             req.method(),
             req.uri().path(),
-            &body_digest,
+            &body_digest.digest_str,
             &self.app_id,
             &timestamp_str,
             &encoded_query
@@ -197,13 +205,13 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v1(&self, req: &mut Request<Body>, body: String) {
+    pub fn sign_request_v1(&self, req: &mut Request<Body>, body: BodyDigest) {
         let timestamp_str = Utc::now().timestamp().to_string();
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}\n{}\n",
             req.method(),
             req.uri().path(),
-            &body,
+            &body.body_str,
             &self.app_id,
             &timestamp_str,
         );
@@ -447,6 +455,54 @@ impl MAuthInfo {
                 Some(pub_key)
             }
         }
+    }
+}
+
+/// All of the possible errors that can take place when attempting to read a config file. Errors
+/// are specific to the libraries that created them, and include the details from those libraries.
+#[derive(Debug)]
+pub enum ConfigReadError {
+    FileReadError(io::Error),
+    InvalidFile(Option<serde_yaml::Error>),
+    InvalidUri(http::uri::InvalidUri),
+    AppUuid(uuid::Error),
+    OpenSSLError(openssl::error::ErrorStack),
+    RingKeyError(ring::error::KeyRejected),
+}
+
+impl From<io::Error> for ConfigReadError {
+    fn from(err: io::Error) -> ConfigReadError {
+        ConfigReadError::FileReadError(err)
+    }
+}
+
+impl From<serde_yaml::Error> for ConfigReadError {
+    fn from(err: serde_yaml::Error) -> ConfigReadError {
+        ConfigReadError::InvalidFile(Some(err))
+    }
+}
+
+impl From<http::uri::InvalidUri> for ConfigReadError {
+    fn from(err: http::uri::InvalidUri) -> ConfigReadError {
+        ConfigReadError::InvalidUri(err)
+    }
+}
+
+impl From<uuid::Error> for ConfigReadError {
+    fn from(err: uuid::Error) -> ConfigReadError {
+        ConfigReadError::AppUuid(err)
+    }
+}
+
+impl From<openssl::error::ErrorStack> for ConfigReadError {
+    fn from(err: openssl::error::ErrorStack) -> ConfigReadError {
+        ConfigReadError::OpenSSLError(err)
+    }
+}
+
+impl From<ring::error::KeyRejected> for ConfigReadError {
+    fn from(err: ring::error::KeyRejected) -> ConfigReadError {
+        ConfigReadError::RingKeyError(err)
     }
 }
 
