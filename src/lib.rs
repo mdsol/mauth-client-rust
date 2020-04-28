@@ -16,7 +16,7 @@
 //! let mut req = Request::new(body);
 //! *req.method_mut() = Method::GET;
 //! *req.uri_mut() = uri.clone();
-//! mauth_info.sign_request_v2(&mut req, body_digest);
+//! mauth_info.sign_request_v2(&mut req, &body_digest);
 //! match client.request(req).await {
 //!     Err(err) => println!("Got error {}", err),
 //!     Ok(response) => match mauth_info.validate_response_v2(response).await {
@@ -55,12 +55,15 @@ const CONFIG_FILE: &str = ".mauth_config.yml";
 ///
 /// Note that it contains a cache of response keys for verifying response signatures. This cache
 /// makes the struct non-Sync.
+#[allow(dead_code)]
 pub struct MAuthInfo {
     app_id: Uuid,
     private_key: RsaKeyPair,
     openssl_private_key: Rsa<Private>,
     mauth_uri_base: hyper::Uri,
     remote_key_store: RefCell<HashMap<Uuid, Rsa<Public>>>,
+    sign_with_v1_also: bool,
+    allow_v1_response_auth: bool,
 }
 
 /// This struct holds the digest information required to perform the signing operation. It is a
@@ -114,6 +117,8 @@ impl MAuthInfo {
             remote_key_store: RefCell::new(HashMap::new()),
             private_key: RsaKeyPair::from_der(&der_key_data)?,
             openssl_private_key: openssl_key.rsa()?,
+            sign_with_v1_also: !common_section_typed.v2_only_sign_requests.unwrap_or(false),
+            allow_v1_response_auth: !common_section_typed.v2_only_authenticate.unwrap_or(false),
         })
     }
 
@@ -136,6 +141,16 @@ impl MAuthInfo {
         )
     }
 
+    /// This method determines how to sign the request automatically while respecting the
+    /// `v2_only_sign_requests` flag in the config file. It always signs with the V2 algorithm and
+    /// signature, and will also sign with the V1 algorithm, if the configruation permits.
+    pub fn sign_request(&self, mut req: &mut Request<Body>, body_digest: &BodyDigest) {
+        self.sign_request_v2(&mut req, &body_digest);
+        if self.sign_with_v1_also {
+            self.sign_request_v1(&mut req, &body_digest);
+        }
+    }
+
     /// Sign a provided request using the MAuth V2 protocol. The signature consists of 2 headers
     /// containing both a timestamp and a signature string, and will be added to the headers of the
     /// request. It is required to pass a `body_digest` computed by the
@@ -144,7 +159,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v2(&self, req: &mut Request<Body>, body_digest: BodyDigest) {
+    pub fn sign_request_v2(&self, req: &mut Request<Body>, body_digest: &BodyDigest) {
         let timestamp_str = Utc::now().timestamp().to_string();
         let encoded_query: String = req
             .uri()
@@ -205,7 +220,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v1(&self, req: &mut Request<Body>, body: BodyDigest) {
+    pub fn sign_request_v1(&self, req: &mut Request<Body>, body: &BodyDigest) {
         let timestamp_str = Utc::now().timestamp().to_string();
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}\n{}\n",
@@ -437,7 +452,7 @@ impl MAuthInfo {
         uri_parts.path_and_query = Some(path_str.parse().unwrap());
         let uri = hyper::Uri::from_parts(uri_parts).unwrap();
         *req.uri_mut() = uri;
-        self.sign_request_v2(&mut req, body_digest);
+        self.sign_request_v2(&mut req, &body_digest);
         let mauth_response = client.request(req).await;
         match mauth_response {
             Err(_) => None,
