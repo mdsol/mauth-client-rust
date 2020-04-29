@@ -29,3 +29,6 @@ hex = ">= 0.4.0"
 openssl = ">= 0.10.0"
 bytes = "*" #No version needed as many other crates depend on it as well
 http = "*"
+
+[dev-dependencies]
+tokio = { version = ">= 0.2.0", features = ["rt-threaded", "macros"] }

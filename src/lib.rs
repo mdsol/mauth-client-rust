@@ -100,25 +100,28 @@ impl MAuthInfo {
             .ok_or(ConfigReadError::InvalidFile(None))?;
         let common_section_typed: ConfigFileSection =
             serde_yaml::from_value(common_section.clone())?;
+        Self::from_config_section(common_section_typed).await
+    }
 
+    async fn from_config_section(section: ConfigFileSection) -> Result<MAuthInfo, ConfigReadError> {
         let full_uri: hyper::Uri = format!(
             "{}/mauth/{}/security_tokens/",
-            &common_section_typed.mauth_baseurl, &common_section_typed.mauth_api_version
+            &section.mauth_baseurl, &section.mauth_api_version
         )
         .parse()?;
 
-        let pk_data = fs::read(&common_section_typed.private_key_file).await?;
+        let pk_data = fs::read(&section.private_key_file).await?;
         let openssl_key = PKey::private_key_from_pem(&pk_data)?;
         let der_key_data = openssl_key.private_key_to_der()?;
 
         Ok(MAuthInfo {
-            app_id: Uuid::parse_str(&common_section_typed.app_uuid)?,
+            app_id: Uuid::parse_str(&section.app_uuid)?,
             mauth_uri_base: full_uri,
             remote_key_store: RefCell::new(HashMap::new()),
             private_key: RsaKeyPair::from_der(&der_key_data)?,
             openssl_private_key: openssl_key.rsa()?,
-            sign_with_v1_also: !common_section_typed.v2_only_sign_requests.unwrap_or(false),
-            allow_v1_response_auth: !common_section_typed.v2_only_authenticate.unwrap_or(false),
+            sign_with_v1_also: !section.v2_only_sign_requests.unwrap_or(false),
+            allow_v1_response_auth: !section.v2_only_authenticate.unwrap_or(false),
         })
     }
 
@@ -473,6 +476,9 @@ impl MAuthInfo {
     }
 }
 
+#[cfg(test)]
+mod config_test;
+
 /// All of the possible errors that can take place when attempting to read a config file. Errors
 /// are specific to the libraries that created them, and include the details from those libraries.
 #[derive(Debug)]
@@ -480,7 +486,7 @@ pub enum ConfigReadError {
     FileReadError(io::Error),
     InvalidFile(Option<serde_yaml::Error>),
     InvalidUri(http::uri::InvalidUri),
-    AppUuid(uuid::Error),
+    InvalidAppUuid(uuid::Error),
     OpenSSLError(openssl::error::ErrorStack),
     RingKeyError(ring::error::KeyRejected),
 }
@@ -505,7 +511,7 @@ impl From<http::uri::InvalidUri> for ConfigReadError {
 
 impl From<uuid::Error> for ConfigReadError {
     fn from(err: uuid::Error) -> ConfigReadError {
-        ConfigReadError::AppUuid(err)
+        ConfigReadError::InvalidAppUuid(err)
     }
 }
 
