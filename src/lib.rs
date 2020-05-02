@@ -162,13 +162,24 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v2(&self, req: &mut Request<Body>, body_digest: &BodyDigest) {
+    pub fn sign_request_v2(&self, mut req: &mut Request<Body>, body_digest: &BodyDigest) {
         let timestamp_str = Utc::now().timestamp().to_string();
+        let string_to_sign = self.get_signing_string_v2(&req, &body_digest, &timestamp_str);
+        let signature = self.sign_string_v2(string_to_sign);
+        self.set_headers_v2(&mut req, signature, &timestamp_str);
+    }
+
+    fn get_signing_string_v2(
+        &self,
+        req: &Request<Body>,
+        body_digest: &BodyDigest,
+        timestamp_str: &str,
+    ) -> String {
         let encoded_query: String = req
             .uri()
             .query()
             .map_or("".to_string(), |q| Self::encode_query(q));
-        let string_to_sign = format!(
+        format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             req.method(),
             req.uri().path(),
@@ -176,24 +187,29 @@ impl MAuthInfo {
             &self.app_id,
             &timestamp_str,
             &encoded_query
-        );
+        )
+    }
 
+    fn sign_string_v2(&self, string: String) -> String {
         let mut signature = vec![0; self.private_key.public_modulus_len()];
         self.private_key
             .sign(
                 &RSA_PKCS1_SHA512,
                 &SystemRandom::new(),
-                string_to_sign.as_bytes(),
+                string.as_bytes(),
                 &mut signature,
             )
             .unwrap();
-        let signature = format!("MWSV2 {}:{};", self.app_id, base64::encode(&signature));
+        base64::encode(&signature)
+    }
 
+    fn set_headers_v2(&self, req: &mut Request<Body>, signature: String, timestamp_str: &str) {
+        let sig_head_str = format!("MWSV2 {}:{};", self.app_id, &signature);
         let headers = req.headers_mut();
         headers.insert("MCC-Time", HeaderValue::from_str(&timestamp_str).unwrap());
         headers.insert(
             "MCC-Authentication",
-            HeaderValue::from_str(&signature).unwrap(),
+            HeaderValue::from_str(&sig_head_str).unwrap(),
         );
     }
 
@@ -478,6 +494,8 @@ impl MAuthInfo {
 
 #[cfg(test)]
 mod config_test;
+#[cfg(test)]
+mod protocol_test_suite;
 
 /// All of the possible errors that can take place when attempting to read a config file. Errors
 /// are specific to the libraries that created them, and include the details from those libraries.

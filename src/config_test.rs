@@ -68,5 +68,8 @@ async fn bad_uuid_returns_right_error() {
     };
     let load_result = MAuthInfo::from_config_section(bad_config).await;
     fs::remove_file(&filename).await.unwrap();
-    assert!(matches!(load_result, Err(ConfigReadError::InvalidAppUuid(_))));
+    assert!(matches!(
+        load_result,
+        Err(ConfigReadError::InvalidAppUuid(_))
+    ));
 }
