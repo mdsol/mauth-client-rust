@@ -44,16 +44,15 @@ async fn setup_mauth_info() -> (MAuthInfo, u64) {
     )
 }
 
-#[tokio::test]
-async fn get_vanilla_string_to_sign() {
+async fn test_string_to_sign(file_name: String) {
     let (mauth_info, req_time) = setup_mauth_info().await;
     let mut req_file_path = PathBuf::from(&BASE_PATH);
-    req_file_path.push("get-vanilla/get-vanilla.req");
+    req_file_path.push(format!("{name}/{name}.req", name = &file_name));
     let request_shape: RequestShape =
         serde_json::from_slice(&fs::read(req_file_path).await.unwrap()).unwrap();
 
     let mut sts_file_path = PathBuf::from(&BASE_PATH);
-    sts_file_path.push("get-vanilla/get-vanilla.sts");
+    sts_file_path.push(format!("{name}/{name}.sts", name = &file_name));
     let expected_string_to_sign =
         String::from_utf8(fs::read(sts_file_path).await.unwrap()).unwrap();
 
@@ -67,15 +66,14 @@ async fn get_vanilla_string_to_sign() {
     assert_eq!(expected_string_to_sign, sts);
 }
 
-#[tokio::test]
-async fn get_vanilla_sign_string() {
+async fn test_sign_string(file_name: String) {
     let (mauth_info, _) = setup_mauth_info().await;
     let mut sts_file_path = PathBuf::from(&BASE_PATH);
-    sts_file_path.push("get-vanilla/get-vanilla.sts");
+    sts_file_path.push(format!("{name}/{name}.sts", name = &file_name));
     let string_to_sign = String::from_utf8(fs::read(sts_file_path).await.unwrap()).unwrap();
 
     let mut sig_file_path = PathBuf::from(&BASE_PATH);
-    sig_file_path.push("get-vanilla/get-vanilla.sig");
+    sig_file_path.push(format!("{name}/{name}.sig", name = &file_name));
     let expected_sig = String::from_utf8(fs::read(sig_file_path).await.unwrap()).unwrap();
 
     let signed = mauth_info.sign_string_v2(string_to_sign);
@@ -83,16 +81,15 @@ async fn get_vanilla_sign_string() {
     assert_eq!(expected_sig, signed);
 }
 
-#[tokio::test]
-async fn get_vanilla_generate_headers() {
+async fn test_generate_headers(file_name: String) {
     let (mauth_info, req_time) = setup_mauth_info().await;
 
     let mut sig_file_path = PathBuf::from(&BASE_PATH);
-    sig_file_path.push("get-vanilla/get-vanilla.sig");
+    sig_file_path.push(format!("{name}/{name}.sig", name = &file_name));
     let sig = String::from_utf8(fs::read(sig_file_path).await.unwrap()).unwrap();
 
     let mut authz_file_path = PathBuf::from(&BASE_PATH);
-    authz_file_path.push("get-vanilla/get-vanilla.authz");
+    authz_file_path.push(format!("{name}/{name}.authz", name = &file_name));
     let auth_headers: serde_json::Value =
         serde_json::from_slice(&fs::read(authz_file_path).await.unwrap()).unwrap();
 
@@ -119,3 +116,5 @@ async fn get_vanilla_generate_headers() {
     assert_eq!(expected_time, time_header);
     assert_eq!(expected_sig, sig_header);
 }
+
+include!(concat!(env!("OUT_DIR"), "/protocol_tests.rs"));
