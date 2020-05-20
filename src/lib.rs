@@ -35,7 +35,8 @@ use hyper::body::HttpBody;
 use hyper::header::HeaderValue;
 use hyper::{Body, Client, Method, Request, Response};
 use hyper_tls::HttpsConnector;
-use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{percent_decode, percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use regex::{Captures, Regex};
 use ring::rand::SystemRandom;
 use ring::signature::{
     RsaKeyPair, UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA512, RSA_PKCS1_SHA512,
@@ -182,7 +183,7 @@ impl MAuthInfo {
         format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             req.method(),
-            req.uri().path(),
+            Self::normalize_url(req.uri().path()),
             &body_digest.digest_str,
             &self.app_id,
             &timestamp_str,
@@ -216,6 +217,7 @@ impl MAuthInfo {
     const MAUTH_ENCODE_CHARS: &'static AsciiSet = &NON_ALPHANUMERIC
         .remove(b'-')
         .remove(b'_')
+        .remove(b'%')
         .remove(b'.')
         .remove(b'~');
 
@@ -225,12 +227,22 @@ impl MAuthInfo {
         s.iter()
             .map(|p| {
                 p.split('=')
+                    .map(|x| percent_decode(x.as_bytes()).decode_utf8().unwrap())
                     .map(|x| percent_encode(x.as_bytes(), Self::MAUTH_ENCODE_CHARS).to_string())
                     .collect::<Vec<String>>()
                     .join("=")
             })
             .collect::<Vec<String>>()
             .join("&")
+    }
+
+    fn normalize_url(urlstr: &str) -> String {
+        let squeeze_regex = Regex::new(r"/+").unwrap();
+        let percent_case_regex = Regex::new(r"%[a-f0-9]{2}").unwrap();
+        let url = squeeze_regex.replace_all(urlstr, "/");
+        let url =
+            percent_case_regex.replace_all(&url, |c: &Captures| c[0].to_uppercase().to_string());
+        url.to_string()
     }
 
     /// Sign a provided request using the MAuth V1 protocol. The signature consists of 2 headers
