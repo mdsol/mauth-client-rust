@@ -251,7 +251,12 @@ impl MAuthInfo {
         s.iter()
             .map(|p| {
                 p.split('=')
-                    .map(|x| percent_decode(x.as_bytes()).decode_utf8().unwrap())
+                    .map(|x| {
+                        percent_decode(x.as_bytes())
+                            .decode_utf8()
+                            .unwrap()
+                            .replace("+", " ")
+                    })
                     .map(|x| percent_encode(x.as_bytes(), Self::MAUTH_ENCODE_CHARS).to_string())
                     .collect::<Vec<String>>()
                     .join("=")
