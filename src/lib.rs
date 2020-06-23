@@ -135,11 +135,11 @@ impl MAuthInfo {
     /// Note that this method must be used with all empty-body requests, including GET requests.
     pub fn build_body_with_digest(body: String) -> (Body, BodyDigest) {
         let mut hasher = Sha512::default();
-        hasher.input(body.as_bytes());
+        hasher.update(body.as_bytes());
         (
             Body::from(body.clone()),
             BodyDigest {
-                digest_str: hex::encode(hasher.result()),
+                digest_str: hex::encode(hasher.finalize()),
                 body_str: body,
             },
         )
@@ -273,10 +273,10 @@ impl MAuthInfo {
         );
 
         let mut hasher = Sha512::default();
-        hasher.input(string_to_sign.as_bytes());
+        hasher.update(string_to_sign.as_bytes());
         let mut sign_output = vec![0; self.openssl_private_key.size() as usize];
         self.openssl_private_key
-            .private_encrypt(&hasher.result(), &mut sign_output, Padding::PKCS1)
+            .private_encrypt(&hasher.finalize(), &mut sign_output, Padding::PKCS1)
             .unwrap();
         let signature = format!("MWS {}:{}", self.app_id, base64::encode(&sign_output));
 
@@ -367,11 +367,11 @@ impl MAuthInfo {
         //Compute response signing string
         let body_raw: Vec<u8> = Self::bytes_from_body(body).await?;
         let mut hasher = Sha512::default();
-        hasher.input(&body_raw);
+        hasher.update(&body_raw);
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}",
             &parts.status.as_u16(),
-            hex::encode(hasher.result()),
+            hex::encode(hasher.finalize()),
             &host_app_uuid,
             &ts_str,
         );
@@ -434,18 +434,18 @@ impl MAuthInfo {
         let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header)?;
 
         let mut hasher = Sha512::default();
-        hasher.input(&body_raw);
+        hasher.update(&body_raw);
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}",
             &parts.status.as_u16(),
-            hex::encode(hasher.result()),
+            hex::encode(hasher.finalize()),
             &host_app_uuid,
             &ts_str,
         );
 
         let mut hasher2 = Sha512::default();
-        hasher2.input(&string_to_sign.as_bytes());
-        let sign_input = hasher2.result();
+        hasher2.update(&string_to_sign.as_bytes());
+        let sign_input = hasher2.finalize();
         let pub_key = self
             .get_app_pub_key(&host_app_uuid)
             .await
