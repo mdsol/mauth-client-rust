@@ -38,7 +38,6 @@ async fn setup_mauth_info() -> (MAuthInfo, u64) {
     };
     (
         MAuthInfo::from_config_section(mock_config_section)
-            .await
             .unwrap(),
         sign_config.request_time,
     )
