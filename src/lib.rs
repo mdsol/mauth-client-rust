@@ -90,29 +90,29 @@ impl MAuthInfo {
     /// Construct the MAuthInfo struct based on the contents of the config file `.mauth_config.yml`
     /// present in the current user's home directory. Returns an enum error type that includes the
     /// error types of all crates used.
-    pub async fn from_default_file() -> Result<MAuthInfo, ConfigReadError> {
+    pub fn from_default_file() -> Result<MAuthInfo, ConfigReadError> {
         let mut home = dirs::home_dir().unwrap();
         home.push(CONFIG_FILE);
-        let config_data = fs::read(&home).await?;
+        let config_data = std::fs::read_to_string(&home)?;
 
-        let config_data_value: serde_yaml::Value = serde_yaml::from_slice(&config_data)?;
+        let config_data_value: serde_yaml::Value = serde_yaml::from_slice(&config_data.as_bytes())?;
         let common_section = config_data_value
             .get("common")
             .ok_or(ConfigReadError::InvalidFile(None))?;
         let common_section_typed: ConfigFileSection =
             serde_yaml::from_value(common_section.clone())?;
-        Self::from_config_section(common_section_typed).await
+        Self::from_config_section(common_section_typed)
     }
 
-    async fn from_config_section(section: ConfigFileSection) -> Result<MAuthInfo, ConfigReadError> {
+    fn from_config_section(section: ConfigFileSection) -> Result<MAuthInfo, ConfigReadError> {
         let full_uri: hyper::Uri = format!(
             "{}/mauth/{}/security_tokens/",
             &section.mauth_baseurl, &section.mauth_api_version
         )
         .parse()?;
 
-        let pk_data = fs::read(&section.private_key_file).await?;
-        let openssl_key = PKey::private_key_from_pem(&pk_data)?;
+        let pk_data = std::fs::read_to_string(&section.private_key_file)?;
+        let openssl_key = PKey::private_key_from_pem(&pk_data.as_bytes())?;
         let der_key_data = openssl_key.private_key_to_der()?;
 
         Ok(MAuthInfo {
