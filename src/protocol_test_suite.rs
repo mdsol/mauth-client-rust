@@ -10,6 +10,7 @@ struct RequestShape {
     verb: String,
     url: String,
     body: Option<String>,
+    body_filepath: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -56,8 +57,17 @@ async fn test_string_to_sign(file_name: String) {
     let expected_string_to_sign =
         String::from_utf8(fs::read(sts_file_path).await.unwrap()).unwrap();
 
-    let (body, digest) =
-        MAuthInfo::build_body_with_digest(request_shape.body.unwrap_or("".to_string()));
+    let mut body_data: Vec<u8> = vec![];
+    if let Some(direct_str) = request_shape.body {
+        body_data = direct_str.as_bytes().to_vec();
+    } else if let Some(filename_str) = request_shape.body_filepath {
+        let mut body_file_path = PathBuf::from(&BASE_PATH);
+        body_file_path.push(&file_name);
+        body_file_path.push(filename_str);
+        body_data = fs::read(body_file_path).await.unwrap();
+    }
+
+    let (body, digest) = MAuthInfo::build_body_with_digest_from_bytes(body_data);
     let mut req = Request::new(body);
     *req.method_mut() = Method::from_bytes(request_shape.verb.as_bytes()).unwrap();
     *req.uri_mut() = request_shape.url.parse().unwrap();
