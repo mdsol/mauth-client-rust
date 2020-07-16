@@ -35,7 +35,7 @@ use hyper::body::HttpBody;
 use hyper::header::HeaderValue;
 use hyper::{Body, Client, Method, Request, Response};
 use hyper_tls::HttpsConnector;
-use percent_encoding::{percent_decode, percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::{Captures, Regex};
 use ring::rand::SystemRandom;
 use ring::signature::{
@@ -246,18 +246,21 @@ impl MAuthInfo {
         .remove(b'~');
 
     fn encode_query(qstr: &str) -> String {
-        let mut s: Vec<String> = qstr.split('&').map(|p| p.to_owned()).collect();
-        s.sort();
-        s.iter()
+        let mut temp_param_list: Vec<Vec<Vec<u8>>> = qstr
+            .split('&')
             .map(|p| {
                 p.split('=')
-                    .map(|x| {
-                        percent_decode(x.as_bytes())
-                            .decode_utf8()
-                            .unwrap()
-                            .replace("+", " ")
-                    })
-                    .map(|x| percent_encode(x.as_bytes(), Self::MAUTH_ENCODE_CHARS).to_string())
+                    .map(|x| percent_decode_str(&x.replace("+", " ")).collect())
+                    .collect()
+            })
+            .collect();
+
+        temp_param_list.sort();
+        temp_param_list
+            .iter()
+            .map(|p| {
+                p.iter()
+                    .map(|x| percent_encode(&x, Self::MAUTH_ENCODE_CHARS).to_string())
                     .collect::<Vec<String>>()
                     .join("=")
             })
