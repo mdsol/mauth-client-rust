@@ -272,10 +272,8 @@ impl MAuthInfo {
         let squeeze_regex = Regex::new(r"/+").unwrap();
         let url = squeeze_regex.replace_all(urlstr, "/");
         let percent_case_regex = Regex::new(r"%[a-f0-9]{2}").unwrap();
-        let url =
-            percent_case_regex.replace_all(&url, |c: &Captures| c[0].to_uppercase().to_string());
-        let path_regex1 = Regex::new(r"/\./").unwrap();
-        let mut url = path_regex1.replace_all(&url, "/").to_string();
+        let url = percent_case_regex.replace_all(&url, |c: &Captures| c[0].to_uppercase());
+        let mut url = url.replace("/./", "/");
         let path_regex2 = Regex::new(r"/[^/]+/\.\./?").unwrap();
         loop {
             let new_url = path_regex2.replace_all(&url, "/").to_string();
@@ -535,7 +533,7 @@ impl MAuthInfo {
                     .and_then(|s| s.as_str())
                     .unwrap();
                 let pub_key = Rsa::public_key_from_pem(&pub_key_str.as_bytes()).unwrap();
-                key_store.insert(app_uuid.clone(), pub_key.clone());
+                key_store.insert(*app_uuid, pub_key.clone());
                 Some(pub_key)
             }
         }
