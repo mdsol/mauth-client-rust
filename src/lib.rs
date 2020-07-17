@@ -8,7 +8,7 @@
 //! # use hyper::{Body, Client, Method, Request, Response};
 //! # use hyper_tls::HttpsConnector;
 //! # async fn make_signed_request() {
-//! let mauth_info = MAuthInfo::from_default_file().await.unwrap();
+//! let mauth_info = MAuthInfo::from_default_file().unwrap();
 //! let https = HttpsConnector::new();
 //! let client = Client::builder().build::<_, hyper::Body>(https);
 //! let uri: hyper::Uri = "https://www.example.com/".parse().unwrap();
@@ -43,7 +43,7 @@ use ring::signature::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha512};
-use tokio::{fs, io};
+use tokio::io;
 use uuid::Uuid;
 
 use openssl::pkey::{PKey, Private, Public};
