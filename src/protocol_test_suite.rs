@@ -56,15 +56,16 @@ async fn test_string_to_sign(file_name: String) {
     let expected_string_to_sign =
         String::from_utf8(fs::read(sts_file_path).await.unwrap()).unwrap();
 
-    let mut body_data: Vec<u8> = vec![];
-    if let Some(direct_str) = request_shape.body {
-        body_data = direct_str.as_bytes().to_vec();
-    } else if let Some(filename_str) = request_shape.body_filepath {
-        let mut body_file_path = PathBuf::from(&BASE_PATH);
-        body_file_path.push(&file_name);
-        body_file_path.push(filename_str);
-        body_data = fs::read(body_file_path).await.unwrap();
-    }
+    let body_data = match (request_shape.body, request_shape.body_filepath) {
+        (Some(direct_str), None) => direct_str.as_bytes().to_vec(),
+        (None, Some(filename_str)) => {
+            let mut body_file_path = PathBuf::from(&BASE_PATH);
+            body_file_path.push(&file_name);
+            body_file_path.push(filename_str);
+            fs::read(body_file_path).await.unwrap()
+        },
+        _ => vec![],
+    };
 
     let (body, digest) = MAuthInfo::build_body_with_digest_from_bytes(body_data);
     let mut req = Request::new(body);
