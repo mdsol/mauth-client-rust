@@ -8,7 +8,7 @@
 //! # use hyper::{Body, Client, Method, Request, Response};
 //! # use hyper_tls::HttpsConnector;
 //! # async fn make_signed_request() {
-//! let mauth_info = MAuthInfo::from_default_file().await.unwrap();
+//! let mauth_info = MAuthInfo::from_default_file().unwrap();
 //! let https = HttpsConnector::new();
 //! let client = Client::builder().build::<_, hyper::Body>(https);
 //! let uri: hyper::Uri = "https://www.example.com/".parse().unwrap();
@@ -35,7 +35,7 @@ use hyper::body::HttpBody;
 use hyper::header::HeaderValue;
 use hyper::{Body, Client, Method, Request, Response};
 use hyper_tls::HttpsConnector;
-use percent_encoding::{percent_decode, percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::{Captures, Regex};
 use ring::rand::SystemRandom;
 use ring::signature::{
@@ -43,7 +43,7 @@ use ring::signature::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha512};
-use tokio::{fs, io};
+use tokio::io;
 use uuid::Uuid;
 
 use openssl::pkey::{PKey, Private, Public};
@@ -73,7 +73,7 @@ pub struct MAuthInfo {
 /// signing methods.
 pub struct BodyDigest {
     digest_str: String,
-    body_str: String,
+    body_data: Vec<u8>,
 }
 
 #[derive(Deserialize)]
@@ -140,7 +140,31 @@ impl MAuthInfo {
             Body::from(body.clone()),
             BodyDigest {
                 digest_str: hex::encode(hasher.finalize()),
-                body_str: body,
+                body_data: body.as_bytes().to_vec(),
+            },
+        )
+    }
+
+    /// The MAuth Protocol requires computing a digest of the full text body of the request to be
+    /// sent. This is incompatible with the Hyper crate's structs, which do not allow the body of a
+    /// constructed Request to be read. To solve this, use this function to compute both the body to
+    /// be used to build the Request struct, and the digest struct to be passed to the
+    /// [`sign_request_v2`](#method.sign_request_v2) function.
+    ///
+    /// This function is an alternate version of the build_body_with_digest function that allows
+    /// the user to build request bodies from data that does not meet the Rust String type
+    /// requirements of being valid UTF8. Any binary data can be transformed into the appropriate
+    /// objects and signed using this function.
+    ///
+    /// Note that this method must be used with all empty-body requests, including GET requests.
+    pub fn build_body_with_digest_from_bytes(body: Vec<u8>) -> (Body, BodyDigest) {
+        let mut hasher = Sha512::default();
+        hasher.update(body.clone());
+        (
+            Body::from(body.clone()),
+            BodyDigest {
+                digest_str: hex::encode(hasher.finalize()),
+                body_data: body,
             },
         )
     }
@@ -222,13 +246,21 @@ impl MAuthInfo {
         .remove(b'~');
 
     fn encode_query(qstr: &str) -> String {
-        let mut s: Vec<String> = qstr.split('&').map(|p| p.to_owned()).collect();
-        s.sort();
-        s.iter()
+        let mut temp_param_list: Vec<Vec<Vec<u8>>> = qstr
+            .split('&')
             .map(|p| {
                 p.split('=')
-                    .map(|x| percent_decode(x.as_bytes()).decode_utf8().unwrap())
-                    .map(|x| percent_encode(x.as_bytes(), Self::MAUTH_ENCODE_CHARS).to_string())
+                    .map(|x| percent_decode_str(&x.replace("+", " ")).collect())
+                    .collect()
+            })
+            .collect();
+
+        temp_param_list.sort();
+        temp_param_list
+            .iter()
+            .map(|p| {
+                p.iter()
+                    .map(|x| percent_encode(&x, Self::MAUTH_ENCODE_CHARS).to_string())
                     .collect::<Vec<String>>()
                     .join("=")
             })
@@ -240,10 +272,8 @@ impl MAuthInfo {
         let squeeze_regex = Regex::new(r"/+").unwrap();
         let url = squeeze_regex.replace_all(urlstr, "/");
         let percent_case_regex = Regex::new(r"%[a-f0-9]{2}").unwrap();
-        let url =
-            percent_case_regex.replace_all(&url, |c: &Captures| c[0].to_uppercase().to_string());
-        let path_regex1 = Regex::new(r"/\./").unwrap();
-        let mut url = path_regex1.replace_all(&url, "/").to_string();
+        let url = percent_case_regex.replace_all(&url, |c: &Captures| c[0].to_uppercase());
+        let mut url = url.replace("/./", "/");
         let path_regex2 = Regex::new(r"/[^/]+/\.\./?").unwrap();
         loop {
             let new_url = path_regex2.replace_all(&url, "/").to_string();
@@ -263,17 +293,13 @@ impl MAuthInfo {
     /// shortly after the signature takes place.
     pub fn sign_request_v1(&self, req: &mut Request<Body>, body: &BodyDigest) {
         let timestamp_str = Utc::now().timestamp().to_string();
-        let string_to_sign = format!(
-            "{}\n{}\n{}\n{}\n{}\n",
-            req.method(),
-            req.uri().path(),
-            &body.body_str,
-            &self.app_id,
-            &timestamp_str,
-        );
-
         let mut hasher = Sha512::default();
-        hasher.update(string_to_sign.as_bytes());
+        let string_to_sign1 = format!("{}\n{}\n", req.method(), req.uri().path());
+        hasher.update(string_to_sign1.as_bytes());
+        hasher.update(body.body_data.clone());
+        let string_to_sign2 = format!("\n{}\n{}\n", &self.app_id, &timestamp_str);
+        hasher.update(string_to_sign2.as_bytes());
+
         let mut sign_output = vec![0; self.openssl_private_key.size() as usize];
         self.openssl_private_key
             .private_encrypt(&hasher.finalize(), &mut sign_output, Padding::PKCS1)
@@ -507,7 +533,7 @@ impl MAuthInfo {
                     .and_then(|s| s.as_str())
                     .unwrap();
                 let pub_key = Rsa::public_key_from_pem(&pub_key_str.as_bytes()).unwrap();
-                key_store.insert(app_uuid.clone(), pub_key.clone());
+                key_store.insert(*app_uuid, pub_key.clone());
                 Some(pub_key)
             }
         }

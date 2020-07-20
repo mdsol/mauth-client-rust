@@ -10,6 +10,7 @@ struct RequestShape {
     verb: String,
     url: String,
     body: Option<String>,
+    body_filepath: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -55,11 +56,22 @@ async fn test_string_to_sign(file_name: String) {
     let expected_string_to_sign =
         String::from_utf8(fs::read(sts_file_path).await.unwrap()).unwrap();
 
-    let (body, digest) =
-        MAuthInfo::build_body_with_digest(request_shape.body.unwrap_or("".to_string()));
+    let body_data = match (request_shape.body, request_shape.body_filepath) {
+        (Some(direct_str), None) => direct_str.as_bytes().to_vec(),
+        (None, Some(filename_str)) => {
+            let mut body_file_path = PathBuf::from(&BASE_PATH);
+            body_file_path.push(&file_name);
+            body_file_path.push(filename_str);
+            fs::read(body_file_path).await.unwrap()
+        },
+        _ => vec![],
+    };
+
+    let (body, digest) = MAuthInfo::build_body_with_digest_from_bytes(body_data);
     let mut req = Request::new(body);
     *req.method_mut() = Method::from_bytes(request_shape.verb.as_bytes()).unwrap();
-    *req.uri_mut() = request_shape.url.parse().unwrap();
+    let fixed_url = request_shape.url.replace(" ", "%20");
+    *req.uri_mut() = fixed_url.parse().unwrap();
     let sts = mauth_info.get_signing_string_v2(&req, &digest, &req_time.to_string());
 
     assert_eq!(expected_string_to_sign, sts);
