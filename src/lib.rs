@@ -95,7 +95,8 @@ impl MAuthInfo {
         home.push(CONFIG_FILE);
         let config_data = std::fs::read_to_string(&home)?;
 
-        let config_data_value: serde_yaml::Value = serde_yaml::from_slice(&config_data.as_bytes())?;
+        let config_data_value: serde_yaml::Value =
+            serde_yaml::from_slice(&config_data.into_bytes())?;
         let common_section = config_data_value
             .get("common")
             .ok_or(ConfigReadError::InvalidFile(None))?;
@@ -112,7 +113,7 @@ impl MAuthInfo {
         .parse()?;
 
         let pk_data = std::fs::read_to_string(&section.private_key_file)?;
-        let openssl_key = PKey::private_key_from_pem(&pk_data.as_bytes())?;
+        let openssl_key = PKey::private_key_from_pem(&pk_data.into_bytes())?;
         let der_key_data = openssl_key.private_key_to_der()?;
 
         Ok(MAuthInfo {
@@ -140,7 +141,7 @@ impl MAuthInfo {
             Body::from(body.clone()),
             BodyDigest {
                 digest_str: hex::encode(hasher.finalize()),
-                body_data: body.as_bytes().to_vec(),
+                body_data: body.into_bytes(),
             },
         )
     }
@@ -221,7 +222,7 @@ impl MAuthInfo {
             .sign(
                 &RSA_PKCS1_SHA512,
                 &SystemRandom::new(),
-                string.as_bytes(),
+                &string.into_bytes(),
                 &mut signature,
             )
             .unwrap();
@@ -413,7 +414,7 @@ impl MAuthInfo {
                     &RSA_PKCS1_2048_8192_SHA512,
                     bytes::Bytes::from(pub_key.public_key_to_der_pkcs1().unwrap()),
                 );
-                match ring_key.verify(&string_to_sign.as_bytes(), &raw_signature) {
+                match ring_key.verify(&string_to_sign.into_bytes(), &raw_signature) {
                     Ok(()) => {
                         String::from_utf8(body_raw).map_err(|_| MAuthValidationError::InvalidBody)
                     }
@@ -474,7 +475,7 @@ impl MAuthInfo {
         );
 
         let mut hasher2 = Sha512::default();
-        hasher2.update(&string_to_sign.as_bytes());
+        hasher2.update(&string_to_sign.into_bytes());
         let sign_input = hasher2.finalize();
         let pub_key = self
             .get_app_pub_key(&host_app_uuid)
@@ -493,7 +494,7 @@ impl MAuthInfo {
 
         /*match self.get_app_pub_key(&host_app_uuid, &mut runtime) {
             None => return Err(MAuthValidationError::KeyUnavailable),
-            Some(pub_key) => match pub_key.verify(&string_to_sign.as_bytes(), &raw_signature) {
+            Some(pub_key) => match pub_key.verify(&string_to_sign.into_bytes(), &raw_signature) {
                 Ok(()) => {
                     String::from_utf8(body_raw).map_err(|_| MAuthValidationError::InvalidBody)
                 }
