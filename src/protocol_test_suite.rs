@@ -38,8 +38,7 @@ async fn setup_mauth_info() -> (MAuthInfo, u64) {
         v2_only_authenticate: None,
     };
     (
-        MAuthInfo::from_config_section(mock_config_section)
-            .unwrap(),
+        MAuthInfo::from_config_section(mock_config_section).unwrap(),
         sign_config.request_time,
     )
 }
@@ -63,7 +62,7 @@ async fn test_string_to_sign(file_name: String) {
             body_file_path.push(&file_name);
             body_file_path.push(filename_str);
             fs::read(body_file_path).await.unwrap()
-        },
+        }
         _ => vec![],
     };
 
