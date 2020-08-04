@@ -295,19 +295,23 @@ impl MAuthInfo {
         let timestamp_str = Utc::now().timestamp().to_string();
         let mut hasher = Sha512::default();
         let string_to_sign1 = format!("{}\n{}\n", req.method(), req.uri().path());
-        hasher.update(string_to_sign1.as_bytes());
+        hasher.update(string_to_sign1.into_bytes());
         hasher.update(body.body_data.clone());
-        let string_to_sign2 = format!("\n{}\n{}\n", &self.app_id, &timestamp_str);
-        hasher.update(string_to_sign2.as_bytes());
+        let string_to_sign2 = format!("\n{}\n{}", &self.app_id, &timestamp_str);
+        hasher.update(string_to_sign2.into_bytes());
 
         let mut sign_output = vec![0; self.openssl_private_key.size() as usize];
         self.openssl_private_key
-            .private_encrypt(&hasher.finalize(), &mut sign_output, Padding::PKCS1)
+            .private_encrypt(
+                &hex::encode(&hasher.finalize()).into_bytes(),
+                &mut sign_output,
+                Padding::PKCS1,
+            )
             .unwrap();
         let signature = format!("MWS {}:{}", self.app_id, base64::encode(&sign_output));
 
         let headers = req.headers_mut();
-        headers.insert("X-MWS-TIME", HeaderValue::from_str(&timestamp_str).unwrap());
+        headers.insert("X-MWS-Time", HeaderValue::from_str(&timestamp_str).unwrap());
         headers.insert(
             "X-MWS-Authentication",
             HeaderValue::from_str(&signature).unwrap(),
