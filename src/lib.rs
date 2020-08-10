@@ -56,7 +56,6 @@ const CONFIG_FILE: &str = ".mauth_config.yml";
 ///
 /// Note that it contains a cache of response keys for verifying response signatures. This cache
 /// makes the struct non-Sync.
-#[allow(dead_code)]
 pub struct MAuthInfo {
     app_id: Uuid,
     private_key: RsaKeyPair,
@@ -172,7 +171,7 @@ impl MAuthInfo {
 
     /// This method determines how to sign the request automatically while respecting the
     /// `v2_only_sign_requests` flag in the config file. It always signs with the V2 algorithm and
-    /// signature, and will also sign with the V1 algorithm, if the configruation permits.
+    /// signature, and will also sign with the V1 algorithm, if the configuration permits.
     pub fn sign_request(&self, mut req: &mut Request<Body>, body_digest: &BodyDigest) {
         self.sign_request_v2(&mut req, &body_digest);
         if self.sign_with_v1_also {
