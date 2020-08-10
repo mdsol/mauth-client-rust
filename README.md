@@ -17,8 +17,12 @@ let mut req = Request::new(body);
 mauth_info.sign_request(&mut req, &body_digest);
 match client.request(req).await {
     Err(err) => println!("Got error {}", err),
-    Ok(response) => match mauth_info.validate_response(response).await {
-        Ok(resp_body) => println!("Got validated response body {}", &resp_body),
+    Ok(mut response) => match mauth_info.validate_response(&mut response).await {
+        Ok(resp_body) => println!(
+            "Got validated response with status {} and body {}",
+            &response.status().as_str(),
+            &String::from_utf8(resp_body).unwrap()
+        ),
         Err(err) => println!("Error validating response: {:?}", err),
     }
 }
