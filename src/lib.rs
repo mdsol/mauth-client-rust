@@ -361,7 +361,7 @@ impl MAuthInfo {
 
     fn split_auth_string(
         auth_str: &str,
-        expected_prefix: String,
+        expected_prefix: &str,
     ) -> Result<(Uuid, Vec<u8>), MAuthValidationError> {
         let header_pattern = vec![' ', ':', ';'];
         let mut header_split = auth_str.split(header_pattern.as_slice());
@@ -418,8 +418,7 @@ impl MAuthInfo {
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
-        let (host_app_uuid, raw_signature) =
-            Self::split_auth_string(&sig_header, "MWSV2".to_string())?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header, "MWSV2")?;
 
         //Compute response signing string
         let mut hasher = Sha512::default();
@@ -469,8 +468,7 @@ impl MAuthInfo {
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
-        let (host_app_uuid, raw_signature) =
-            Self::split_auth_string(&sig_header, "MWS".to_string())?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header, "MWS")?;
 
         //Build signature string and hash to final format
         let mut hasher = Sha512::default();
