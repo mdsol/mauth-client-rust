@@ -16,11 +16,15 @@
 //! let mut req = Request::new(body);
 //! *req.method_mut() = Method::GET;
 //! *req.uri_mut() = uri.clone();
-//! mauth_info.sign_request_v2(&mut req, &body_digest);
+//! mauth_info.sign_request(&mut req, &body_digest);
 //! match client.request(req).await {
 //!     Err(err) => println!("Got error {}", err),
-//!     Ok(response) => match mauth_info.validate_response_v2(response).await {
-//!         Ok(resp_body) => println!("Got validated response body {}", &resp_body),
+//!     Ok(mut response) => match mauth_info.validate_response(&mut response).await {
+//!         Ok(resp_body) => println!(
+//!             "Got validated response with status {} and body {}",
+//!             &response.status().as_str(),
+//!             &String::from_utf8(resp_body).unwrap()
+//!         ),
 //!         Err(err) => println!("Error validating response: {:?}", err),
 //!     }
 //! }
@@ -56,7 +60,6 @@ const CONFIG_FILE: &str = ".mauth_config.yml";
 ///
 /// Note that it contains a cache of response keys for verifying response signatures. This cache
 /// makes the struct non-Sync.
-#[allow(dead_code)]
 pub struct MAuthInfo {
     app_id: Uuid,
     private_key: RsaKeyPair,
@@ -172,11 +175,50 @@ impl MAuthInfo {
 
     /// This method determines how to sign the request automatically while respecting the
     /// `v2_only_sign_requests` flag in the config file. It always signs with the V2 algorithm and
-    /// signature, and will also sign with the V1 algorithm, if the configruation permits.
+    /// signature, and will also sign with the V1 algorithm, if the configuration permits.
     pub fn sign_request(&self, mut req: &mut Request<Body>, body_digest: &BodyDigest) {
         self.sign_request_v2(&mut req, &body_digest);
         if self.sign_with_v1_also {
             self.sign_request_v1(&mut req, &body_digest);
+        }
+    }
+
+    /// Validate that a Hyper Response contains a valid MAuth signature. Returns either the
+    /// validated response body, or an error with details on why the signature was invalid.
+    ///
+    /// This method will attempt to validate a V2 signature first. If that fails, and if the
+    /// flag `allow_v1_response_auth` is set in the configuration, it will then attempt to validate
+    /// a V1 signature. It will return `Ok(body)` if the request successfully authenticates,
+    /// otherwise, it will return the most recent validation error.
+    ///
+    /// This function requires a mutable borrow of the response and will consume the body contents,
+    /// as that is the only way to get the body out and perform the necessary hashing on it. Once
+    /// the validation is complete, the other properties of the response may be inspected as
+    /// needed.
+    ///
+    /// This method is `async` because it may make a HTTP request to the MAuth server in order to
+    /// retrieve the public key for the application that signed the response. Application keys are
+    /// cached in the MAuth struct, so the request only needs to be made once.
+    pub async fn validate_response(
+        &self,
+        response: &mut Response<Body>,
+    ) -> Result<Vec<u8>, MAuthValidationError> {
+        let body_raw: Vec<u8> = Self::bytes_from_body(&mut response.body_mut()).await?;
+        let status = response.status();
+        let headers = response.headers();
+        match self
+            .validate_response_v2(&status, &headers, &body_raw)
+            .await
+        {
+            Ok(body) => Ok(body),
+            Err(v2_error) => {
+                if self.allow_v1_response_auth {
+                    self.validate_response_v1(&status, &headers, &body_raw)
+                        .await
+                } else {
+                    Err(v2_error)
+                }
+            }
         }
     }
 
@@ -331,14 +373,17 @@ impl MAuthInfo {
         }
     }
 
-    fn split_auth_string(auth_str: &str) -> Result<(Uuid, Vec<u8>), MAuthValidationError> {
+    fn split_auth_string(
+        auth_str: &str,
+        expected_prefix: &str,
+    ) -> Result<(Uuid, Vec<u8>), MAuthValidationError> {
         let header_pattern = vec![' ', ':', ';'];
         let mut header_split = auth_str.split(header_pattern.as_slice());
 
         let start_str = header_split
             .next()
             .ok_or(MAuthValidationError::InvalidSignature)?;
-        if start_str != "MWSV2" {
+        if start_str != expected_prefix {
             return Err(MAuthValidationError::InvalidSignature);
         }
         let host_uuid_str = header_split
@@ -354,7 +399,7 @@ impl MAuthInfo {
         Ok((host_app_uuid, raw_signature))
     }
 
-    async fn bytes_from_body(mut body: Body) -> Result<Vec<u8>, MAuthValidationError> {
+    async fn bytes_from_body(body: &mut Body) -> Result<Vec<u8>, MAuthValidationError> {
         let mut response_vec = vec![];
         while let Some(chunk) = body.data().await {
             response_vec.extend_from_slice(
@@ -366,21 +411,14 @@ impl MAuthInfo {
         Ok(response_vec)
     }
 
-    /// Validate that a Hyper Response contains a valid MAuth V2 signature. Returns either the
-    /// validated response body, or an error with details on why the signature was invalid.
-    ///
-    /// This method is `async` because it may make a HTTP request to the MAuth server in order to
-    /// retrieve the public key for the application that signed the response. Application keys are
-    /// cached in the MAuth struct, so the request only needs to be made once.
-    pub async fn validate_response_v2(
+    async fn validate_response_v2(
         &self,
-        response: Response<Body>,
-    ) -> Result<String, MAuthValidationError> {
-        let (parts, body) = response.into_parts();
-        let resp_headers = parts.headers;
-
+        status: &http::StatusCode,
+        headers: &hyper::HeaderMap,
+        body_raw: &[u8],
+    ) -> Result<Vec<u8>, MAuthValidationError> {
         //retrieve and validate timestamp
-        let ts_str = resp_headers
+        let ts_str = headers
             .get("MCC-Time")
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
@@ -388,20 +426,19 @@ impl MAuthInfo {
         Self::validate_timestamp(&ts_str)?;
 
         //retrieve and parse auth string
-        let sig_header = resp_headers
+        let sig_header = headers
             .get("MCC-Authentication")
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
-        let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header)?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header, "MWSV2")?;
 
         //Compute response signing string
-        let body_raw: Vec<u8> = Self::bytes_from_body(body).await?;
         let mut hasher = Sha512::default();
         hasher.update(&body_raw);
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}",
-            &parts.status.as_u16(),
+            &status.as_u16(),
             hex::encode(hasher.finalize()),
             &host_app_uuid,
             &ts_str,
@@ -415,41 +452,21 @@ impl MAuthInfo {
                     bytes::Bytes::from(pub_key.public_key_to_der_pkcs1().unwrap()),
                 );
                 match ring_key.verify(&string_to_sign.into_bytes(), &raw_signature) {
-                    Ok(()) => {
-                        String::from_utf8(body_raw).map_err(|_| MAuthValidationError::InvalidBody)
-                    }
+                    Ok(()) => Ok(body_raw.to_vec()),
                     Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
                 }
             }
         }
     }
 
-    /// Validate that a Hyper Response contains a valid MAuth V1 signature. Returns either the
-    /// validated response body, or an error with details on why the signature was invalid.
-    ///
-    /// **Warning, this method does not currently work correctly**
-    ///
-    /// This method is `async` because it may make a HTTP request to the MAuth server in order to
-    /// retrieve the public key for the application that signed the response. Application keys are
-    /// cached in the MAuth struct, so the request only needs to be made once.
-    pub async fn validate_response_v1(
+    async fn validate_response_v1(
         &self,
-        response: Response<Body>,
-    ) -> Result<String, MAuthValidationError> {
-        let (parts, body) = response.into_parts();
-        let resp_headers = parts.headers;
-
-        let body_raw: Vec<u8> = Self::bytes_from_body(body).await?;
-        let body_str =
-            String::from_utf8(body_raw.clone()).map_err(|_| MAuthValidationError::InvalidBody)?;
-        println!("Response body is {}", &body_str);
-
-        for hkey in resp_headers.keys() {
-            println!("Has response header '{}'", hkey.as_str());
-        }
-
+        status: &http::StatusCode,
+        headers: &hyper::HeaderMap,
+        body_raw: &[u8],
+    ) -> Result<Vec<u8>, MAuthValidationError> {
         //retrieve and validate timestamp
-        let ts_str = resp_headers
+        let ts_str = headers
             .get("X-MWS-Time")
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
@@ -457,50 +474,37 @@ impl MAuthInfo {
         Self::validate_timestamp(&ts_str)?;
 
         //retrieve and parse auth string
-        let sig_header = resp_headers
+        let sig_header = headers
             .get("X-MWS-Authentication")
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
-        let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header)?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header, "MWS")?;
 
+        //Build signature string and hash to final format
         let mut hasher = Sha512::default();
+        let string1 = format!("{}\n", &status.as_u16());
+        hasher.update(&string1.into_bytes());
         hasher.update(&body_raw);
-        let string_to_sign = format!(
-            "{}\n{}\n{}\n{}",
-            &parts.status.as_u16(),
-            hex::encode(hasher.finalize()),
-            &host_app_uuid,
-            &ts_str,
-        );
+        let string2 = format!("\n{}\n{}", &host_app_uuid, &ts_str);
+        hasher.update(&string2.into_bytes());
+        let sign_input: Vec<u8> = hex::encode(hasher.finalize()).into_bytes();
 
-        let mut hasher2 = Sha512::default();
-        hasher2.update(&string_to_sign.into_bytes());
-        let sign_input = hasher2.finalize();
+        //Decrypt signature from server
         let pub_key = self
             .get_app_pub_key(&host_app_uuid)
             .await
             .ok_or(MAuthValidationError::KeyUnavailable)?;
-        let mut sign_output = vec![0; self.openssl_private_key.size() as usize];
-        pub_key
+        let mut sign_output: Vec<u8> = vec![0; pub_key.size() as usize];
+        let len = pub_key
             .public_decrypt(&raw_signature, &mut sign_output, Padding::PKCS1)
             .unwrap();
 
-        if sign_input.len() == sign_output.len() {
-            Ok(body_str)
+        if *sign_input.as_slice() == sign_output[0..len] {
+            Ok(body_raw.to_vec())
         } else {
             Err(MAuthValidationError::SignatureVerifyFailure)
         }
-
-        /*match self.get_app_pub_key(&host_app_uuid, &mut runtime) {
-            None => return Err(MAuthValidationError::KeyUnavailable),
-            Some(pub_key) => match pub_key.verify(&string_to_sign.into_bytes(), &raw_signature) {
-                Ok(()) => {
-                    String::from_utf8(body_raw).map_err(|_| MAuthValidationError::InvalidBody)
-                }
-                Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
-            },
-        }*/
     }
 
     async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Rsa<Public>> {
@@ -529,9 +533,12 @@ impl MAuthInfo {
         match mauth_response {
             Err(_) => None,
             Ok(response) => {
-                let response_str =
-                    String::from_utf8(Self::bytes_from_body(response.into_body()).await.unwrap())
-                        .unwrap();
+                let response_str = String::from_utf8(
+                    Self::bytes_from_body(&mut response.into_body())
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
                 let response_obj: serde_json::Value = serde_json::from_str(&response_str).unwrap();
                 let pub_key_str = response_obj
                     .pointer("/security_token/public_key_str")
