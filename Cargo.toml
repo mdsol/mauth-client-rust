@@ -3,7 +3,8 @@ name = "mauth-client"
 version = "0.1.0"
 authors = ["Mason Gup <mgup@mdsol.com>"]
 edition = "2018"
-license-file = "LICENSE.txt"
+documentation = "https://docs.rs/mauth-client/0.1.0/mauth_client/"
+license = "MIT"
 description = "Sign requests and validate responses using the Medidata MAuth protocol"
 readme = "README.md"
 homepage = "https://github.com/mdsol/mauth-client-rust"
@@ -28,8 +29,8 @@ sha2 = ">= 0.9.0"
 hex = ">= 0.4.0"
 openssl = ">= 0.10.0"
 regex = { version = "1", default_features = false, features = ["std"] }
-bytes = "*" #No version needed as many other crates depend on it as well
-http = "*"
+bytes = ">= 1.0.0"
+http = ">= 0.2.3"
 
 [dev-dependencies]
 tokio = { version = ">= 1.0.1", features = ["rt-multi-thread", "macros"] }
