@@ -2,7 +2,7 @@
 name = "mauth-client"
 version = "0.1.0"
 authors = ["Mason Gup <mgup@mdsol.com>"]
-edition = "2018"
+edition = "2021"
 documentation = "https://docs.rs/mauth-client/0.1.0/mauth_client/"
 license = "MIT"
 description = "Sign requests and validate responses using the Medidata MAuth protocol"
