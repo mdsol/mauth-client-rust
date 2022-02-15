@@ -180,10 +180,10 @@ impl MAuthInfo {
     /// This method determines how to sign the request automatically while respecting the
     /// `v2_only_sign_requests` flag in the config file. It always signs with the V2 algorithm and
     /// signature, and will also sign with the V1 algorithm, if the configuration permits.
-    pub fn sign_request(&self, mut req: &mut Request<Body>, body_digest: &BodyDigest) {
-        self.sign_request_v2(&mut req, &body_digest);
+    pub fn sign_request(&self, req: &mut Request<Body>, body_digest: &BodyDigest) {
+        self.sign_request_v2(req, body_digest);
         if self.sign_with_v1_also {
-            self.sign_request_v1(&mut req, &body_digest);
+            self.sign_request_v1(req, body_digest);
         }
     }
 
@@ -207,17 +207,17 @@ impl MAuthInfo {
         &self,
         response: &mut Response<Body>,
     ) -> Result<Vec<u8>, MAuthValidationError> {
-        let body_raw: Vec<u8> = Self::bytes_from_body(&mut response.body_mut()).await?;
+        let body_raw: Vec<u8> = Self::bytes_from_body(response.body_mut()).await?;
         let status = response.status();
         let headers = response.headers();
         match self
-            .validate_response_v2(&status, &headers, &body_raw)
+            .validate_response_v2(&status, headers, &body_raw)
             .await
         {
             Ok(body) => Ok(body),
             Err(v2_error) => {
                 if self.allow_v1_response_auth {
-                    self.validate_response_v1(&status, &headers, &body_raw)
+                    self.validate_response_v1(&status, headers, &body_raw)
                         .await
                 } else {
                     Err(v2_error)
@@ -234,11 +234,11 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v2(&self, mut req: &mut Request<Body>, body_digest: &BodyDigest) {
+    pub fn sign_request_v2(&self, req: &mut Request<Body>, body_digest: &BodyDigest) {
         let timestamp_str = Utc::now().timestamp().to_string();
-        let string_to_sign = self.get_signing_string_v2(&req, &body_digest, &timestamp_str);
+        let string_to_sign = self.get_signing_string_v2(req, body_digest, &timestamp_str);
         let signature = self.sign_string_v2(string_to_sign);
-        self.set_headers_v2(&mut req, signature, &timestamp_str);
+        self.set_headers_v2(req, signature, &timestamp_str);
     }
 
     fn get_signing_string_v2(
@@ -250,7 +250,7 @@ impl MAuthInfo {
         let encoded_query: String = req
             .uri()
             .query()
-            .map_or("".to_string(), |q| Self::encode_query(q));
+            .map_or("".to_string(), Self::encode_query);
         format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             req.method(),
@@ -278,7 +278,7 @@ impl MAuthInfo {
     fn set_headers_v2(&self, req: &mut Request<Body>, signature: String, timestamp_str: &str) {
         let sig_head_str = format!("MWSV2 {}:{};", self.app_id, &signature);
         let headers = req.headers_mut();
-        headers.insert("MCC-Time", HeaderValue::from_str(&timestamp_str).unwrap());
+        headers.insert("MCC-Time", HeaderValue::from_str(timestamp_str).unwrap());
         headers.insert(
             "MCC-Authentication",
             HeaderValue::from_str(&sig_head_str).unwrap(),
@@ -307,7 +307,7 @@ impl MAuthInfo {
             .iter()
             .map(|p| {
                 p.iter()
-                    .map(|x| percent_encode(&x, Self::MAUTH_ENCODE_CHARS).to_string())
+                    .map(|x| percent_encode(x, Self::MAUTH_ENCODE_CHARS).to_string())
                     .collect::<Vec<String>>()
                     .join("=")
             })
@@ -427,7 +427,7 @@ impl MAuthInfo {
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidTime)?;
-        Self::validate_timestamp(&ts_str)?;
+        Self::validate_timestamp(ts_str)?;
 
         //retrieve and parse auth string
         let sig_header = headers
@@ -435,7 +435,7 @@ impl MAuthInfo {
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
-        let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header, "MWSV2")?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWSV2")?;
 
         //Compute response signing string
         let mut hasher = Sha512::default();
@@ -475,7 +475,7 @@ impl MAuthInfo {
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidTime)?;
-        Self::validate_timestamp(&ts_str)?;
+        Self::validate_timestamp(ts_str)?;
 
         //retrieve and parse auth string
         let sig_header = headers
@@ -483,7 +483,7 @@ impl MAuthInfo {
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
-        let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header, "MWS")?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWS")?;
 
         //Build signature string and hash to final format
         let mut hasher = Sha512::default();
@@ -513,7 +513,7 @@ impl MAuthInfo {
 
     async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Rsa<Public>> {
         let mut key_store = self.remote_key_store.borrow_mut();
-        if let Some(pub_key) = key_store.get(&app_uuid) {
+        if let Some(pub_key) = key_store.get(app_uuid) {
             return Some(pub_key.clone());
         }
         let https = HttpsConnector::new();
@@ -548,7 +548,7 @@ impl MAuthInfo {
                     .pointer("/security_token/public_key_str")
                     .and_then(|s| s.as_str())
                     .unwrap();
-                let pub_key = Rsa::public_key_from_pem(&pub_key_str.as_bytes()).unwrap();
+                let pub_key = Rsa::public_key_from_pem(pub_key_str.as_bytes()).unwrap();
                 key_store.insert(*app_uuid, pub_key.clone());
                 Some(pub_key)
             }
