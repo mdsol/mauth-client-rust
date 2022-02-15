@@ -31,3 +31,20 @@ match client.request(req).await {
     }
 }
 ```
+
+The above code will read your mauth configuration from a file in `~/.mauth_config.yml` which format is:
+```yaml
+common: &common
+  mauth_baseurl: https://<URL of MAUTH SERVER>
+  mauth_api_version: v1
+  app_uuid: <YOUR APP UUID HERE>
+  private_key_file: <PATH TO MAUTH KEY>
+  timeout: 100
+  open_timeout: 100
+production:
+  <<: *common
+development:
+  <<: *common
+test:
+  <<: *common
+```
