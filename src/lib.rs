@@ -98,6 +98,10 @@ impl MAuthInfo {
     /// present in the current user's home directory. Returns an enum error type that includes the
     /// error types of all crates used.
     pub fn from_default_file() -> Result<MAuthInfo, ConfigReadError> {
+        Self::from_config_section(&Self::config_section_from_default_file()?)
+    }
+
+    fn config_section_from_default_file() -> Result<ConfigFileSection, ConfigReadError> {
         let mut home = dirs::home_dir().unwrap();
         home.push(CONFIG_FILE);
         let config_data = std::fs::read_to_string(&home)?;
@@ -109,10 +113,10 @@ impl MAuthInfo {
             .ok_or(ConfigReadError::InvalidFile(None))?;
         let common_section_typed: ConfigFileSection =
             serde_yaml::from_value(common_section.clone())?;
-        Self::from_config_section(common_section_typed)
+        Ok(common_section_typed)
     }
 
-    fn from_config_section(section: ConfigFileSection) -> Result<MAuthInfo, ConfigReadError> {
+    fn from_config_section(section: &ConfigFileSection) -> Result<MAuthInfo, ConfigReadError> {
         let full_uri: hyper::Uri = format!(
             "{}/mauth/{}/security_tokens/",
             &section.mauth_baseurl, &section.mauth_api_version
@@ -632,4 +636,55 @@ pub enum MAuthValidationError {
     KeyUnavailable,
     /// The body of the response did not match the signature
     SignatureVerifyFailure,
+}
+
+pub struct MAuthValidationService<S> {
+    mauth_info: MAuthInfo,
+    service: S,
+}
+
+use std::task::{Context, Poll};
+use tower::{Layer, Service};
+
+impl<S, Request> Service<Request> for MAuthValidationService<S>
+where
+    S: Service<Request>
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.service.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request) -> Self::Future {
+        // does nothing right now, need to do the mauth stuff
+        self.service.call(request)
+    }
+}
+
+pub struct MAuthValidationLayer {
+    config_info: ConfigFileSection,
+}
+
+impl<S> Layer<S> for MAuthValidationLayer {
+    type Service = MAuthValidationService<S>;
+
+    fn layer(&self, service: S) -> Self::Service {
+        MAuthValidationService {
+            mauth_info: MAuthInfo::from_config_section(&self.config_info).unwrap(),
+            service
+        }
+    }
+}
+
+impl MAuthValidationLayer {
+    pub fn from_default_file() -> Result<Self, ConfigReadError> {
+        let config_info = MAuthInfo::config_section_from_default_file()?;
+        // Generate a MAuthInfo and then drop it to validate that it works,
+        // making it safe to use `unwrap` in the service constructor.
+        MAuthInfo::from_config_section(&config_info)?;
+        Ok(MAuthValidationLayer { config_info })
+    }
 }

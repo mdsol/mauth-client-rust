@@ -31,6 +31,7 @@ openssl = ">= 0.10.0"
 regex = { version = "1", default_features = false, features = ["std"] }
 bytes = ">= 1.0.0"
 http = ">= 0.2.3"
+tower = ">= 0.4.13"
 
 [dev-dependencies]
 tokio = { version = ">= 1.0.1", features = ["rt-multi-thread", "macros"] }
