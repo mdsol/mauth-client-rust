@@ -297,7 +297,7 @@ impl MAuthInfo {
             .split('&')
             .map(|p| {
                 p.split('=')
-                    .map(|x| percent_decode_str(&x.replace("+", " ")).collect())
+                    .map(|x| percent_decode_str(&x.replace('+', " ")).collect())
                     .collect()
             })
             .collect();
@@ -350,7 +350,7 @@ impl MAuthInfo {
         let mut sign_output = vec![0; self.openssl_private_key.size() as usize];
         self.openssl_private_key
             .private_encrypt(
-                &hex::encode(&hasher.finalize()).into_bytes(),
+                &hex::encode(hasher.finalize()).into_bytes(),
                 &mut sign_output,
                 Padding::PKCS1,
             )
@@ -370,7 +370,7 @@ impl MAuthInfo {
             .parse()
             .map_err(|_| MAuthValidationError::InvalidTime)?;
         let ts_diff = ts_num - Utc::now().timestamp();
-        if ts_diff > 300 || ts_diff < -300 {
+        if !(-300..=300).contains(&ts_diff) {
             Err(MAuthValidationError::InvalidTime)
         } else {
             Ok(())
@@ -398,7 +398,7 @@ impl MAuthInfo {
         let signature_encoded_string = header_split
             .next()
             .ok_or(MAuthValidationError::InvalidSignature)?;
-        let raw_signature: Vec<u8> = base64::decode(&signature_encoded_string)
+        let raw_signature: Vec<u8> = base64::decode(signature_encoded_string)
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
         Ok((host_app_uuid, raw_signature))
     }
@@ -439,7 +439,7 @@ impl MAuthInfo {
 
         //Compute response signing string
         let mut hasher = Sha512::default();
-        hasher.update(&body_raw);
+        hasher.update(body_raw);
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}",
             &status.as_u16(),
@@ -489,7 +489,7 @@ impl MAuthInfo {
         let mut hasher = Sha512::default();
         let string1 = format!("{}\n", &status.as_u16());
         hasher.update(&string1.into_bytes());
-        hasher.update(&body_raw);
+        hasher.update(body_raw);
         let string2 = format!("\n{}\n{}", &host_app_uuid, &ts_str);
         hasher.update(&string2.into_bytes());
         let sign_input: Vec<u8> = hex::encode(hasher.finalize()).into_bytes();
@@ -512,9 +512,11 @@ impl MAuthInfo {
     }
 
     async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Rsa<Public>> {
-        let mut key_store = self.remote_key_store.borrow_mut();
-        if let Some(pub_key) = key_store.get(app_uuid) {
-            return Some(pub_key.clone());
+        {
+            let key_store = self.remote_key_store.borrow();
+            if let Some(pub_key) = key_store.get(app_uuid) {
+                return Some(pub_key.clone());
+            }
         }
         let https = HttpsConnector::new();
         let client = Client::builder().build::<_, hyper::Body>(https);
@@ -549,6 +551,7 @@ impl MAuthInfo {
                     .and_then(|s| s.as_str())
                     .unwrap();
                 let pub_key = Rsa::public_key_from_pem(pub_key_str.as_bytes()).unwrap();
+                let mut key_store = self.remote_key_store.borrow_mut();
                 key_store.insert(*app_uuid, pub_key.clone());
                 Some(pub_key)
             }
