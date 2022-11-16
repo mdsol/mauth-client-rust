@@ -35,10 +35,10 @@
 //! # }
 //! ```
 
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use chrono::prelude::*;
 use hyper::body::HttpBody;
@@ -58,15 +58,8 @@ use uuid::Uuid;
 
 use openssl::pkey::{PKey, Private, Public};
 use openssl::rsa::{Padding, Rsa};
-use lazy_static::lazy_static;
 
 const CONFIG_FILE: &str = ".mauth_config.yml";
-
-lazy_static! {
-    static ref KEY_CACHE: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>> = {
-        Arc::new(RwLock::new(HashMap::new()))
-    };
-}
 
 /// This is the primary struct of this class. It contains all of the information
 /// required to sign requests using the MAuth protocol and verify the responses.
@@ -77,8 +70,8 @@ pub struct MAuthInfo {
     app_id: Uuid,
     private_key: RsaKeyPair,
     openssl_private_key: Rsa<Private>,
+    remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
     mauth_uri_base: hyper::Uri,
-    // remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
     sign_with_v1_also: bool,
     allow_v1_response_auth: bool,
 }
@@ -107,7 +100,7 @@ impl MAuthInfo {
     /// present in the current user's home directory. Returns an enum error type that includes the
     /// error types of all crates used.
     pub fn from_default_file() -> Result<MAuthInfo, ConfigReadError> {
-        Self::from_config_section(&Self::config_section_from_default_file()?)
+        Self::from_config_section(&Self::config_section_from_default_file()?, None)
     }
 
     fn config_section_from_default_file() -> Result<ConfigFileSection, ConfigReadError> {
@@ -125,7 +118,10 @@ impl MAuthInfo {
         Ok(common_section_typed)
     }
 
-    fn from_config_section(section: &ConfigFileSection) -> Result<MAuthInfo, ConfigReadError> {
+    fn from_config_section(
+        section: &ConfigFileSection,
+        input_keystore: Option<Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>>,
+    ) -> Result<MAuthInfo, ConfigReadError> {
         let full_uri: hyper::Uri = format!(
             "{}/mauth/{}/security_tokens/",
             &section.mauth_baseurl, &section.mauth_api_version
@@ -139,7 +135,8 @@ impl MAuthInfo {
         Ok(MAuthInfo {
             app_id: Uuid::parse_str(&section.app_uuid)?,
             mauth_uri_base: full_uri,
-            // remote_key_store: Arc::new(RwLock::new(HashMap::new())),
+            remote_key_store: input_keystore
+                .unwrap_or_else(|| Arc::new(RwLock::new(HashMap::new()))),
             private_key: RsaKeyPair::from_der(&der_key_data)?,
             openssl_private_key: openssl_key.rsa()?,
             sign_with_v1_also: !section.v2_only_sign_requests.unwrap_or(false),
@@ -250,7 +247,10 @@ impl MAuthInfo {
         self.set_headers_v2(req, signature, &timestamp_str);
     }
 
-    async fn validate_request_v2<B>(&self, req: Request<B>) -> Result<Request<B>, MAuthValidationError>
+    async fn validate_request_v2<B>(
+        &self,
+        req: Request<B>,
+    ) -> Result<Request<B>, MAuthValidationError>
     where
         B: HttpBody,
     {
@@ -534,7 +534,7 @@ impl MAuthInfo {
 
     async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Rsa<Public>> {
         {
-            let key_store = KEY_CACHE.read().unwrap(); //self.remote_key_store.read().unwrap();
+            let key_store = self.remote_key_store.read().unwrap();
             if let Some(pub_key) = key_store.get(app_uuid) {
                 return Some(pub_key.clone());
             }
@@ -572,7 +572,7 @@ impl MAuthInfo {
                     .and_then(|s| s.as_str())
                     .unwrap();
                 let pub_key = Rsa::public_key_from_pem(pub_key_str.as_bytes()).unwrap();
-                let mut key_store = KEY_CACHE.write().unwrap(); // self.remote_key_store.write().unwrap();
+                let mut key_store = self.remote_key_store.write().unwrap();
                 key_store.insert(*app_uuid, pub_key.clone());
                 Some(pub_key)
             }
@@ -669,9 +669,9 @@ pub struct MAuthValidationService<S> {
     service: S,
 }
 
+use futures_core::future::BoxFuture;
 use std::task::{Context, Poll};
 use tower::{Layer, Service};
-use futures_core::future::BoxFuture;
 
 impl<S, B> Service<Request<B>> for MAuthValidationService<S>
 where
@@ -692,13 +692,11 @@ where
         let mut cloned = self.clone();
         Box::pin(async move {
             match cloned.mauth_info.validate_request_v2(request).await {
-                Ok(valid_request) => {
-                    match cloned.service.call(valid_request).await {
-                        Ok(response) => Ok(response),
-                        Err(err) => Err(err.into())
-                    }
+                Ok(valid_request) => match cloned.service.call(valid_request).await {
+                    Ok(response) => Ok(response),
+                    Err(err) => Err(err.into()),
                 },
-                Err(err) => Err(Box::new(err) as Box<dyn Error + Send + Sync>)
+                Err(err) => Err(Box::new(err) as Box<dyn Error + Send + Sync>),
             }
         })
     }
@@ -708,7 +706,11 @@ impl<S: Clone> Clone for MAuthValidationService<S> {
     fn clone(&self) -> Self {
         MAuthValidationService {
             // unwrap is safe because we validated the config_info before constructing the layer
-            mauth_info: MAuthInfo::from_config_section(&self.config_info).unwrap(),
+            mauth_info: MAuthInfo::from_config_section(
+                &self.config_info,
+                Some(self.mauth_info.remote_key_store.clone()),
+            )
+            .unwrap(),
             config_info: self.config_info.clone(),
             service: self.service.clone(),
         }
@@ -717,6 +719,7 @@ impl<S: Clone> Clone for MAuthValidationService<S> {
 
 pub struct MAuthValidationLayer {
     config_info: ConfigFileSection,
+    remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
 }
 
 impl<S> Layer<S> for MAuthValidationLayer {
@@ -725,7 +728,11 @@ impl<S> Layer<S> for MAuthValidationLayer {
     fn layer(&self, service: S) -> Self::Service {
         MAuthValidationService {
             // unwrap is safe because we validated the config_info before constructing the layer
-            mauth_info: MAuthInfo::from_config_section(&self.config_info).unwrap(),
+            mauth_info: MAuthInfo::from_config_section(
+                &self.config_info,
+                Some(self.remote_key_store.clone()),
+            )
+            .unwrap(),
             config_info: self.config_info.clone(),
             service,
         }
@@ -735,9 +742,13 @@ impl<S> Layer<S> for MAuthValidationLayer {
 impl MAuthValidationLayer {
     pub fn from_default_file() -> Result<Self, ConfigReadError> {
         let config_info = MAuthInfo::config_section_from_default_file()?;
+        let remote_key_store = Arc::new(RwLock::new(HashMap::new()));
         // Generate a MAuthInfo and then drop it to validate that it works,
         // making it safe to use `unwrap` in the service constructor.
-        MAuthInfo::from_config_section(&config_info)?;
-        Ok(MAuthValidationLayer { config_info })
+        MAuthInfo::from_config_section(&config_info, Some(remote_key_store.clone()))?;
+        Ok(MAuthValidationLayer {
+            config_info,
+            remote_key_store,
+        })
     }
 }
