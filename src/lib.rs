@@ -9,7 +9,7 @@
 //!
 //! ```no_run
 //! # use mauth_client::MAuthInfo;
-//! # use hyper::{Body, Client, Method, Request, Response};
+//! # use hyper::{Body, Client, Method, Request, Response, body::HttpBody};
 //! # use hyper_tls::HttpsConnector;
 //! # async fn make_signed_request() {
 //! let mauth_info = MAuthInfo::from_default_file().unwrap();
@@ -35,7 +35,9 @@
 //! # }
 //! ```
 
-use std::cell::RefCell;
+use std::sync::{Arc, RwLock};
+use std::error::Error;
+use std::fmt;
 use std::collections::HashMap;
 
 use chrono::prelude::*;
@@ -56,8 +58,15 @@ use uuid::Uuid;
 
 use openssl::pkey::{PKey, Private, Public};
 use openssl::rsa::{Padding, Rsa};
+use lazy_static::lazy_static;
 
 const CONFIG_FILE: &str = ".mauth_config.yml";
+
+lazy_static! {
+    static ref KEY_CACHE: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>> = {
+        Arc::new(RwLock::new(HashMap::new()))
+    };
+}
 
 /// This is the primary struct of this class. It contains all of the information
 /// required to sign requests using the MAuth protocol and verify the responses.
@@ -69,7 +78,7 @@ pub struct MAuthInfo {
     private_key: RsaKeyPair,
     openssl_private_key: Rsa<Private>,
     mauth_uri_base: hyper::Uri,
-    remote_key_store: RefCell<HashMap<Uuid, Rsa<Public>>>,
+    // remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
     sign_with_v1_also: bool,
     allow_v1_response_auth: bool,
 }
@@ -83,7 +92,7 @@ pub struct BodyDigest {
     body_data: Vec<u8>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct ConfigFileSection {
     app_uuid: String,
     mauth_baseurl: String,
@@ -130,7 +139,7 @@ impl MAuthInfo {
         Ok(MAuthInfo {
             app_id: Uuid::parse_str(&section.app_uuid)?,
             mauth_uri_base: full_uri,
-            remote_key_store: RefCell::new(HashMap::new()),
+            // remote_key_store: Arc::new(RwLock::new(HashMap::new())),
             private_key: RsaKeyPair::from_der(&der_key_data)?,
             openssl_private_key: openssl_key.rsa()?,
             sign_with_v1_also: !section.v2_only_sign_requests.unwrap_or(false),
@@ -214,15 +223,11 @@ impl MAuthInfo {
         let body_raw: Vec<u8> = Self::bytes_from_body(response.body_mut()).await?;
         let status = response.status();
         let headers = response.headers();
-        match self
-            .validate_response_v2(&status, headers, &body_raw)
-            .await
-        {
+        match self.validate_response_v2(&status, headers, &body_raw).await {
             Ok(body) => Ok(body),
             Err(v2_error) => {
                 if self.allow_v1_response_auth {
-                    self.validate_response_v1(&status, headers, &body_raw)
-                        .await
+                    self.validate_response_v1(&status, headers, &body_raw).await
                 } else {
                     Err(v2_error)
                 }
@@ -245,16 +250,28 @@ impl MAuthInfo {
         self.set_headers_v2(req, signature, &timestamp_str);
     }
 
+    async fn validate_request_v2<B>(&self, req: Request<B>) -> Result<Request<B>, MAuthValidationError>
+    where
+        B: HttpBody,
+    {
+        let headers = req.headers();
+        //retrieve and validate timestamp
+        let ts_str = headers
+            .get("MCC-Time")
+            .ok_or(MAuthValidationError::NoTime)?
+            .to_str()
+            .map_err(|_| MAuthValidationError::InvalidTime)?;
+        Self::validate_timestamp(ts_str)?;
+        Ok(req)
+    }
+
     fn get_signing_string_v2(
         &self,
         req: &Request<Body>,
         body_digest: &BodyDigest,
         timestamp_str: &str,
     ) -> String {
-        let encoded_query: String = req
-            .uri()
-            .query()
-            .map_or("".to_string(), Self::encode_query);
+        let encoded_query: String = req.uri().query().map_or("".to_string(), Self::encode_query);
         format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             req.method(),
@@ -517,7 +534,7 @@ impl MAuthInfo {
 
     async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Rsa<Public>> {
         {
-            let key_store = self.remote_key_store.borrow();
+            let key_store = KEY_CACHE.read().unwrap(); //self.remote_key_store.read().unwrap();
             if let Some(pub_key) = key_store.get(app_uuid) {
                 return Some(pub_key.clone());
             }
@@ -555,7 +572,7 @@ impl MAuthInfo {
                     .and_then(|s| s.as_str())
                     .unwrap();
                 let pub_key = Rsa::public_key_from_pem(pub_key_str.as_bytes()).unwrap();
-                let mut key_store = self.remote_key_store.borrow_mut();
+                let mut key_store = KEY_CACHE.write().unwrap(); // self.remote_key_store.write().unwrap();
                 key_store.insert(*app_uuid, pub_key.clone());
                 Some(pub_key)
             }
@@ -638,29 +655,63 @@ pub enum MAuthValidationError {
     SignatureVerifyFailure,
 }
 
+impl fmt::Display for MAuthValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", &self)
+    }
+}
+
+impl Error for MAuthValidationError {}
+
 pub struct MAuthValidationService<S> {
     mauth_info: MAuthInfo,
+    config_info: ConfigFileSection,
     service: S,
 }
 
 use std::task::{Context, Poll};
 use tower::{Layer, Service};
+use futures_core::future::BoxFuture;
 
-impl<S, Request> Service<Request> for MAuthValidationService<S>
+impl<S, B> Service<Request<B>> for MAuthValidationService<S>
 where
-    S: Service<Request>
+    S: Service<Request<B>> + Send + Clone + 'static,
+    S::Future: Send + 'static,
+    S::Error: Into<Box<dyn Error + Sync + Send>>,
+    B: HttpBody + Send + 'static,
 {
     type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
+    type Error = Box<dyn Error + Sync + Send>;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx)
+        self.service.poll_ready(cx).map_err(|e| e.into())
     }
 
-    fn call(&mut self, request: Request) -> Self::Future {
-        // does nothing right now, need to do the mauth stuff
-        self.service.call(request)
+    fn call(&mut self, request: Request<B>) -> Self::Future {
+        let mut cloned = self.clone();
+        Box::pin(async move {
+            match cloned.mauth_info.validate_request_v2(request).await {
+                Ok(valid_request) => {
+                    match cloned.service.call(valid_request).await {
+                        Ok(response) => Ok(response),
+                        Err(err) => Err(err.into())
+                    }
+                },
+                Err(err) => Err(Box::new(err) as Box<dyn Error + Send + Sync>)
+            }
+        })
+    }
+}
+
+impl<S: Clone> Clone for MAuthValidationService<S> {
+    fn clone(&self) -> Self {
+        MAuthValidationService {
+            // unwrap is safe because we validated the config_info before constructing the layer
+            mauth_info: MAuthInfo::from_config_section(&self.config_info).unwrap(),
+            config_info: self.config_info.clone(),
+            service: self.service.clone(),
+        }
     }
 }
 
@@ -673,8 +724,10 @@ impl<S> Layer<S> for MAuthValidationLayer {
 
     fn layer(&self, service: S) -> Self::Service {
         MAuthValidationService {
+            // unwrap is safe because we validated the config_info before constructing the layer
             mauth_info: MAuthInfo::from_config_section(&self.config_info).unwrap(),
-            service
+            config_info: self.config_info.clone(),
+            service,
         }
     }
 }
