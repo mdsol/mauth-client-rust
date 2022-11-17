@@ -38,7 +38,7 @@ async fn setup_mauth_info() -> (MAuthInfo, u64) {
         v2_only_authenticate: None,
     };
     (
-        MAuthInfo::from_config_section(mock_config_section).unwrap(),
+        MAuthInfo::from_config_section(&mock_config_section, None).unwrap(),
         sign_config.request_time,
     )
 }

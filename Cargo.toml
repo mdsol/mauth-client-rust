@@ -31,8 +31,12 @@ openssl = ">= 0.10.0"
 regex = { version = "1", default_features = false, features = ["std"] }
 bytes = ">= 1.0.0"
 http = ">= 0.2.3"
-tower = ">= 0.4.13"
-futures-core = ">= 0.3.25"
+tower = { version = ">= 0.4.13", optional = true }
+futures-core = { version = ">= 0.3.25", optional = true }
+thiserror = ">= 1.0.37"
 
 [dev-dependencies]
 tokio = { version = ">= 1.0.1", features = ["rt-multi-thread", "macros"] }
+
+[features]
+server = ["tower", "futures-core"]

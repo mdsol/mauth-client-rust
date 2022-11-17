@@ -13,7 +13,7 @@ async fn invalid_uri_returns_right_error() {
         v2_only_sign_requests: None,
         v2_only_authenticate: None,
     };
-    let load_result = MAuthInfo::from_config_section(bad_config);
+    let load_result = MAuthInfo::from_config_section(&bad_config, None);
     assert!(matches!(load_result, Err(ConfigReadError::InvalidUri(_))));
 }
 
@@ -27,7 +27,7 @@ async fn bad_file_path_returns_right_error() {
         v2_only_sign_requests: None,
         v2_only_authenticate: None,
     };
-    let load_result = MAuthInfo::from_config_section(bad_config);
+    let load_result = MAuthInfo::from_config_section(&bad_config, None);
     assert!(matches!(
         load_result,
         Err(ConfigReadError::FileReadError(_))
@@ -46,7 +46,7 @@ async fn bad_key_file_returns_right_error() {
         v2_only_sign_requests: None,
         v2_only_authenticate: None,
     };
-    let load_result = MAuthInfo::from_config_section(bad_config);
+    let load_result = MAuthInfo::from_config_section(&bad_config, None);
     fs::remove_file(&filename).await.unwrap();
     assert!(matches!(load_result, Err(ConfigReadError::OpenSSLError(_))));
 }
@@ -66,7 +66,7 @@ async fn bad_uuid_returns_right_error() {
         v2_only_sign_requests: None,
         v2_only_authenticate: None,
     };
-    let load_result = MAuthInfo::from_config_section(bad_config);
+    let load_result = MAuthInfo::from_config_section(&bad_config, None);
     fs::remove_file(&filename).await.unwrap();
     assert!(matches!(
         load_result,

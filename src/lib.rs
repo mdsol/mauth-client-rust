@@ -36,8 +36,6 @@
 //! ```
 
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 use std::sync::{Arc, RwLock};
 
 use chrono::prelude::*;
@@ -53,6 +51,7 @@ use ring::signature::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha512};
+use thiserror::Error;
 use tokio::io;
 use uuid::Uuid;
 
@@ -247,6 +246,7 @@ impl MAuthInfo {
         self.set_headers_v2(req, signature, &timestamp_str);
     }
 
+    #[cfg(feature = "server")]
     async fn validate_request_v2<B>(
         &self,
         req: Request<B>,
@@ -257,7 +257,8 @@ impl MAuthInfo {
         let (req_parts, body_raw) = req.into_parts();
 
         //retrieve and parse auth string
-        let sig_header = req_parts.headers
+        let sig_header = req_parts
+            .headers
             .get("MCC-Authentication")
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
@@ -265,7 +266,8 @@ impl MAuthInfo {
         let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWSV2")?;
 
         //retrieve and validate timestamp
-        let ts_str = req_parts.headers
+        let ts_str = req_parts
+            .headers
             .get("MCC-Time")
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
@@ -273,7 +275,10 @@ impl MAuthInfo {
         Self::validate_timestamp(ts_str)?;
 
         //Compute response signing string
-        let encoded_query: String = req_parts.uri.query().map_or("".to_string(), Self::encode_query);
+        let encoded_query: String = req_parts
+            .uri
+            .query()
+            .map_or("".to_string(), Self::encode_query);
         let mut hasher = Sha512::default();
         // let body_bytes = to_bytes(body_raw).await.map_err(|_| MAuthValidationError::InvalidBody)?;
         // hasher.update(&body_bytes);
@@ -300,7 +305,7 @@ impl MAuthInfo {
                         let mut validated_request = Request::from_parts(req_parts, body_raw);
                         validated_request.extensions_mut().insert(host_app_uuid);
                         Ok(validated_request)
-                    },
+                    }
                 }
             }
         }
@@ -629,43 +634,25 @@ mod protocol_test_suite;
 
 /// All of the possible errors that can take place when attempting to read a config file. Errors
 /// are specific to the libraries that created them, and include the details from those libraries.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ConfigReadError {
-    FileReadError(io::Error),
+    #[error("File Read Error: {0}")]
+    FileReadError(#[from] io::Error),
+    #[error("Not a valid maudit config file: {0:?}")]
     InvalidFile(Option<serde_yaml::Error>),
-    InvalidUri(http::uri::InvalidUri),
-    InvalidAppUuid(uuid::Error),
-    OpenSSLError(openssl::error::ErrorStack),
+    #[error("MAudit URI not valid: {0}")]
+    InvalidUri(#[from] http::uri::InvalidUri),
+    #[error("App UUID not valid: {0}")]
+    InvalidAppUuid(#[from] uuid::Error),
+    #[error("Key error: {0}")]
+    OpenSSLError(#[from] openssl::error::ErrorStack),
+    #[error("Key error")]
     RingKeyError(ring::error::KeyRejected),
-}
-
-impl From<io::Error> for ConfigReadError {
-    fn from(err: io::Error) -> ConfigReadError {
-        ConfigReadError::FileReadError(err)
-    }
 }
 
 impl From<serde_yaml::Error> for ConfigReadError {
     fn from(err: serde_yaml::Error) -> ConfigReadError {
         ConfigReadError::InvalidFile(Some(err))
-    }
-}
-
-impl From<http::uri::InvalidUri> for ConfigReadError {
-    fn from(err: http::uri::InvalidUri) -> ConfigReadError {
-        ConfigReadError::InvalidUri(err)
-    }
-}
-
-impl From<uuid::Error> for ConfigReadError {
-    fn from(err: uuid::Error) -> ConfigReadError {
-        ConfigReadError::InvalidAppUuid(err)
-    }
-}
-
-impl From<openssl::error::ErrorStack> for ConfigReadError {
-    fn from(err: openssl::error::ErrorStack) -> ConfigReadError {
-        ConfigReadError::OpenSSLError(err)
     }
 }
 
@@ -676,121 +663,34 @@ impl From<ring::error::KeyRejected> for ConfigReadError {
 }
 
 /// All of the possible errors that can take place when attempting to verify a response signature
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum MAuthValidationError {
     /// The timestamp of the response was either invalid or outside of the permitted
     /// range
+    #[error("The timestamp of the response was either invalid or outside of the permitted range")]
     InvalidTime,
     /// The MAuth signature of the response was either missing or incorrectly formatted
+    #[error("The MAuth signature of the response was either missing or incorrectly formatted")]
     InvalidSignature,
     /// The timestamp header of the response was missing
+    #[error("The timestamp header of the response was missing")]
     NoTime,
     /// The signature header of the response was missing
+    #[error("The signature header of the response was missing")]
     NoSig,
     /// An error occurred while attempting to retrieve part of the response body
+    #[error("An error occurred while attempting to retrieve part of the response body")]
     ResponseProblem,
     /// The response body failed to parse
+    #[error("The response body failed to parse")]
     InvalidBody,
     /// Attempt to retrieve a key to verify the response failed
+    #[error("Attempt to retrieve a key to verify the response failed")]
     KeyUnavailable,
     /// The body of the response did not match the signature
+    #[error("The body of the response did not match the signature")]
     SignatureVerifyFailure,
 }
 
-impl fmt::Display for MAuthValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", &self)
-    }
-}
-
-impl Error for MAuthValidationError {}
-
-pub struct MAuthValidationService<S> {
-    mauth_info: MAuthInfo,
-    config_info: ConfigFileSection,
-    service: S,
-}
-
-use futures_core::future::BoxFuture;
-use std::task::{Context, Poll};
-use tower::{Layer, Service};
-
-impl<S, B> Service<Request<B>> for MAuthValidationService<S>
-where
-    S: Service<Request<B>> + Send + Clone + 'static,
-    S::Future: Send + 'static,
-    S::Error: Into<Box<dyn Error + Sync + Send>>,
-    B: HttpBody<Data = bytes::Bytes> + Send + 'static,
-{
-    type Response = S::Response;
-    type Error = Box<dyn Error + Sync + Send>;
-    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx).map_err(|e| e.into())
-    }
-
-    fn call(&mut self, request: Request<B>) -> Self::Future {
-        let mut cloned = self.clone();
-        Box::pin(async move {
-            match cloned.mauth_info.validate_request_v2(request).await {
-                Ok(valid_request) => match cloned.service.call(valid_request).await {
-                    Ok(response) => Ok(response),
-                    Err(err) => Err(err.into()),
-                },
-                Err(err) => Err(Box::new(err) as Box<dyn Error + Send + Sync>),
-            }
-        })
-    }
-}
-
-impl<S: Clone> Clone for MAuthValidationService<S> {
-    fn clone(&self) -> Self {
-        MAuthValidationService {
-            // unwrap is safe because we validated the config_info before constructing the layer
-            mauth_info: MAuthInfo::from_config_section(
-                &self.config_info,
-                Some(self.mauth_info.remote_key_store.clone()),
-            )
-            .unwrap(),
-            config_info: self.config_info.clone(),
-            service: self.service.clone(),
-        }
-    }
-}
-
-pub struct MAuthValidationLayer {
-    config_info: ConfigFileSection,
-    remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
-}
-
-impl<S> Layer<S> for MAuthValidationLayer {
-    type Service = MAuthValidationService<S>;
-
-    fn layer(&self, service: S) -> Self::Service {
-        MAuthValidationService {
-            // unwrap is safe because we validated the config_info before constructing the layer
-            mauth_info: MAuthInfo::from_config_section(
-                &self.config_info,
-                Some(self.remote_key_store.clone()),
-            )
-            .unwrap(),
-            config_info: self.config_info.clone(),
-            service,
-        }
-    }
-}
-
-impl MAuthValidationLayer {
-    pub fn from_default_file() -> Result<Self, ConfigReadError> {
-        let config_info = MAuthInfo::config_section_from_default_file()?;
-        let remote_key_store = Arc::new(RwLock::new(HashMap::new()));
-        // Generate a MAuthInfo and then drop it to validate that it works,
-        // making it safe to use `unwrap` in the service constructor.
-        MAuthInfo::from_config_section(&config_info, Some(remote_key_store.clone()))?;
-        Ok(MAuthValidationLayer {
-            config_info,
-            remote_key_store,
-        })
-    }
-}
+#[cfg(feature = "server")]
+pub mod tower;
