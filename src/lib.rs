@@ -41,7 +41,7 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 
 use chrono::prelude::*;
-use hyper::body::HttpBody;
+use hyper::body::{to_bytes, HttpBody};
 use hyper::header::HeaderValue;
 use hyper::{Body, Client, Method, Request, Response};
 use hyper_tls::HttpsConnector;
@@ -252,17 +252,59 @@ impl MAuthInfo {
         req: Request<B>,
     ) -> Result<Request<B>, MAuthValidationError>
     where
-        B: HttpBody,
+        B: HttpBody<Data = bytes::Bytes>,
     {
-        let headers = req.headers();
+        let (req_parts, body_raw) = req.into_parts();
+
+        //retrieve and parse auth string
+        let sig_header = req_parts.headers
+            .get("MCC-Authentication")
+            .ok_or(MAuthValidationError::NoSig)?
+            .to_str()
+            .map_err(|_| MAuthValidationError::InvalidSignature)?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWSV2")?;
+
         //retrieve and validate timestamp
-        let ts_str = headers
+        let ts_str = req_parts.headers
             .get("MCC-Time")
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidTime)?;
         Self::validate_timestamp(ts_str)?;
-        Ok(req)
+
+        //Compute response signing string
+        let encoded_query: String = req_parts.uri.query().map_or("".to_string(), Self::encode_query);
+        let mut hasher = Sha512::default();
+        // let body_bytes = to_bytes(body_raw).await.map_err(|_| MAuthValidationError::InvalidBody)?;
+        // hasher.update(&body_bytes);
+        let string_to_sign = format!(
+            "{}\n{}\n{}\n{}\n{}\n{}",
+            req_parts.method,
+            Self::normalize_url(req_parts.uri.path()),
+            &hex::encode(hasher.finalize()),
+            &host_app_uuid,
+            &ts_str,
+            &encoded_query
+        );
+
+        match self.get_app_pub_key(&host_app_uuid).await {
+            None => Err(MAuthValidationError::KeyUnavailable),
+            Some(pub_key) => {
+                let ring_key = UnparsedPublicKey::new(
+                    &RSA_PKCS1_2048_8192_SHA512,
+                    bytes::Bytes::from(pub_key.public_key_to_der_pkcs1().unwrap()),
+                );
+                match ring_key.verify(&string_to_sign.into_bytes(), &raw_signature) {
+                    Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
+                    Ok(()) => {
+                        let mut validated_request = Request::from_parts(req_parts, body_raw);
+                        validated_request.extensions_mut().insert(host_app_uuid);
+                        Ok(validated_request)
+                    },
+                }
+            }
+        }
+        // Ok(Request::from_parts(req_parts, Body::from(body_bytes))) // as dyn HttpBody<Data = B::Data, Error = B::Error>))
     }
 
     fn get_signing_string_v2(
@@ -678,7 +720,7 @@ where
     S: Service<Request<B>> + Send + Clone + 'static,
     S::Future: Send + 'static,
     S::Error: Into<Box<dyn Error + Sync + Send>>,
-    B: HttpBody + Send + 'static,
+    B: HttpBody<Data = bytes::Bytes> + Send + 'static,
 {
     type Response = S::Response;
     type Error = Box<dyn Error + Sync + Send>;
