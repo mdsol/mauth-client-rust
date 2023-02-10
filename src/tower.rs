@@ -1,5 +1,5 @@
 use futures_core::future::BoxFuture;
-use hyper::{body::{to_bytes, HttpBody}, Request};
+use hyper::{body::Body, Request};
 use openssl::{pkey::Public, rsa::Rsa};
 use std::collections::HashMap;
 use std::error::Error;
@@ -16,12 +16,11 @@ pub struct MAuthValidationService<S> {
     service: S,
 }
 
-impl<S, B> Service<Request<B>> for MAuthValidationService<S>
+impl<S> Service<Request<Body>> for MAuthValidationService<S>
 where
-    S: Service<Request<B>> + Send + Clone + 'static,
+    S: Service<Request<Body>> + Send + Clone + 'static,
     S::Future: Send + 'static,
     S::Error: Into<Box<dyn Error + Sync + Send>>,
-    B: HttpBody<Data = bytes::Bytes> + Send + 'static,
 {
     type Response = S::Response;
     type Error = Box<dyn Error + Sync + Send>;
@@ -31,7 +30,7 @@ where
         self.service.poll_ready(cx).map_err(|e| e.into())
     }
 
-    fn call(&mut self, request: Request<B>) -> Self::Future {
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
         let mut cloned = self.clone();
         Box::pin(async move {
             match cloned.mauth_info.validate_request_v2(request).await {
@@ -60,6 +59,7 @@ impl<S: Clone> Clone for MAuthValidationService<S> {
     }
 }
 
+#[derive(Clone)]
 pub struct MAuthValidationLayer {
     config_info: ConfigFileSection,
     remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
