@@ -299,6 +299,7 @@ impl MAuthInfo {
                     Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
                     Ok(()) => {
                         req.extensions_mut().insert(host_app_uuid);
+                        *req.body_mut() = Body::from(body_bytes);
                         Ok(req)
                     }
                 }
