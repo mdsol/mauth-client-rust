@@ -247,18 +247,17 @@ impl MAuthInfo {
     }
 
     #[cfg(feature = "server")]
-    async fn validate_request_v2<B>(
+    async fn validate_request_v2(
         &self,
-        req: Request<B>,
-    ) -> Result<Request<B>, MAuthValidationError>
-    where
-        B: HttpBody<Data = bytes::Bytes>,
-    {
-        let (req_parts, body_raw) = req.into_parts();
+        mut req: Request<Body>,
+    ) -> Result<Request<Body>, MAuthValidationError> {
+        let mut hasher = Sha512::default();
+        let body_bytes = to_bytes(req.body_mut()).await.map_err(|_| MAuthValidationError::InvalidBody)?;
+        hasher.update(&body_bytes);
 
         //retrieve and parse auth string
-        let sig_header = req_parts
-            .headers
+        let sig_header = req
+            .headers()
             .get("MCC-Authentication")
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
@@ -266,8 +265,8 @@ impl MAuthInfo {
         let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWSV2")?;
 
         //retrieve and validate timestamp
-        let ts_str = req_parts
-            .headers
+        let ts_str = req
+            .headers()
             .get("MCC-Time")
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
@@ -275,17 +274,14 @@ impl MAuthInfo {
         Self::validate_timestamp(ts_str)?;
 
         //Compute response signing string
-        let encoded_query: String = req_parts
-            .uri
+        let encoded_query: String = req.uri()
             .query()
             .map_or("".to_string(), Self::encode_query);
-        let mut hasher = Sha512::default();
-        // let body_bytes = to_bytes(body_raw).await.map_err(|_| MAuthValidationError::InvalidBody)?;
-        // hasher.update(&body_bytes);
+
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            req_parts.method,
-            Self::normalize_url(req_parts.uri.path()),
+            req.method(),
+            Self::normalize_url(req.uri().path()),
             &hex::encode(hasher.finalize()),
             &host_app_uuid,
             &ts_str,
@@ -302,9 +298,9 @@ impl MAuthInfo {
                 match ring_key.verify(&string_to_sign.into_bytes(), &raw_signature) {
                     Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
                     Ok(()) => {
-                        let mut validated_request = Request::from_parts(req_parts, body_raw);
-                        validated_request.extensions_mut().insert(host_app_uuid);
-                        Ok(validated_request)
+                        req.extensions_mut().insert(host_app_uuid);
+                        *req.body_mut() = Body::from(body_bytes);
+                        Ok(req)
                     }
                 }
             }
