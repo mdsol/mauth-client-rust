@@ -38,8 +38,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use base64::Engine;
 use chrono::prelude::*;
-use hyper::body::{to_bytes, HttpBody};
+use hyper::body::HttpBody;
 use hyper::header::HeaderValue;
 use hyper::{Body, Client, Method, Request, Response};
 use hyper_tls::HttpsConnector;
@@ -252,7 +253,9 @@ impl MAuthInfo {
         mut req: Request<Body>,
     ) -> Result<Request<Body>, MAuthValidationError> {
         let mut hasher = Sha512::default();
-        let body_bytes = to_bytes(req.body_mut()).await.map_err(|_| MAuthValidationError::InvalidBody)?;
+        let body_bytes = hyper::body::to_bytes(req.body_mut())
+            .await
+            .map_err(|_| MAuthValidationError::InvalidBody)?;
         hasher.update(&body_bytes);
 
         //retrieve and parse auth string
@@ -274,9 +277,7 @@ impl MAuthInfo {
         Self::validate_timestamp(ts_str)?;
 
         //Compute response signing string
-        let encoded_query: String = req.uri()
-            .query()
-            .map_or("".to_string(), Self::encode_query);
+        let encoded_query: String = req.uri().query().map_or("".to_string(), Self::encode_query);
 
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
@@ -336,7 +337,8 @@ impl MAuthInfo {
                 &mut signature,
             )
             .unwrap();
-        base64::encode(&signature)
+        let b64 = base64::engine::general_purpose::STANDARD;
+        b64.encode(&signature)
     }
 
     fn set_headers_v2(&self, req: &mut Request<Body>, signature: String, timestamp_str: &str) {
@@ -419,7 +421,8 @@ impl MAuthInfo {
                 Padding::PKCS1,
             )
             .unwrap();
-        let signature = format!("MWS {}:{}", self.app_id, base64::encode(&sign_output));
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let signature = format!("MWS {}:{}", self.app_id, b64.encode(&sign_output));
 
         let headers = req.headers_mut();
         headers.insert("X-MWS-Time", HeaderValue::from_str(&timestamp_str).unwrap());
@@ -462,7 +465,9 @@ impl MAuthInfo {
         let signature_encoded_string = header_split
             .next()
             .ok_or(MAuthValidationError::InvalidSignature)?;
-        let raw_signature: Vec<u8> = base64::decode(signature_encoded_string)
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let raw_signature: Vec<u8> = b64
+            .decode(signature_encoded_string)
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
         Ok((host_app_uuid, raw_signature))
     }

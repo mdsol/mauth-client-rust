@@ -44,5 +44,5 @@ async fn {formatted_name}_generate_headers() {{
             name = &name
         ));
     }
-    fs::write(&Path::new(&out_dir).join("protocol_tests.rs"), &code_str).unwrap();
+    fs::write(Path::new(&out_dir).join("protocol_tests.rs"), &code_str).unwrap();
 }
