@@ -1,3 +1,5 @@
+//! Structs and impls related to providing a Tower Service and Layer to verify incoming requests
+
 use futures_core::future::BoxFuture;
 use hyper::{body::Body, Request};
 use openssl::{pkey::Public, rsa::Rsa};
@@ -10,6 +12,9 @@ use uuid::Uuid;
 
 use crate::{ConfigFileSection, ConfigReadError, MAuthInfo};
 
+/// This is a Tower Service which validates that incoming requests have a valid
+/// MAuth signature. It only passes the request down to the next layer if the
+/// signature is valid, otherwise it returns an appropriate error to the caller.
 pub struct MAuthValidationService<S> {
     mauth_info: MAuthInfo,
     config_info: ConfigFileSection,
@@ -59,6 +64,8 @@ impl<S: Clone> Clone for MAuthValidationService<S> {
     }
 }
 
+/// This is a Tower Layer which applies the MAuthValidationService on top of the
+/// service provided to it.
 #[derive(Clone)]
 pub struct MAuthValidationLayer {
     config_info: ConfigFileSection,
@@ -83,11 +90,24 @@ impl<S> Layer<S> for MAuthValidationLayer {
 }
 
 impl MAuthValidationLayer {
+    /// Construct a MAuthValidationLayer based on the configuration options in the file
+    /// found in the default location.
     pub fn from_default_file() -> Result<Self, ConfigReadError> {
         let config_info = MAuthInfo::config_section_from_default_file()?;
         let remote_key_store = Arc::new(RwLock::new(HashMap::new()));
         // Generate a MAuthInfo and then drop it to validate that it works,
         // making it safe to use `unwrap` in the service constructor.
+        MAuthInfo::from_config_section(&config_info, Some(remote_key_store.clone()))?;
+        Ok(MAuthValidationLayer {
+            config_info,
+            remote_key_store,
+        })
+    }
+
+    /// Construct a MAuthValidationLayer based on the configuration options in a manually
+    /// created or parsed ConfigFileSection.
+    pub fn from_config_section(config_info: ConfigFileSection) -> Result<Self, ConfigReadError> {
+        let remote_key_store = Arc::new(RwLock::new(HashMap::new()));
         MAuthInfo::from_config_section(&config_info, Some(remote_key_store.clone()))?;
         Ok(MAuthValidationLayer {
             config_info,

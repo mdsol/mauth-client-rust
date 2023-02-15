@@ -34,6 +34,10 @@
 //! }
 //! # }
 //! ```
+//!
+//! The optional `tower-service` feature provides for a Tower Layer and Service that will
+//! authenticate incoming requests via MAuth V2 or V2 and provide to the lower layers a
+//! validated app_uuid from the request via the ValidatedRequestDetails struct.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -92,18 +96,21 @@ pub struct BodyDigest {
 /// purpose.
 #[cfg(feature = "tower-service")]
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ValidatedRequestDetails {
     pub app_uuid: Uuid,
 }
 
+/// All of the configuration data needed to set up a MAuthInfo struct. Implements Deserialize
+/// to be read from a YAML file easily, or can be created manually.
 #[derive(Deserialize, Clone)]
-struct ConfigFileSection {
-    app_uuid: String,
-    mauth_baseurl: String,
-    mauth_api_version: String,
-    private_key_file: String,
-    v2_only_sign_requests: Option<bool>,
-    v2_only_authenticate: Option<bool>,
+pub struct ConfigFileSection {
+    pub app_uuid: String,
+    pub mauth_baseurl: String,
+    pub mauth_api_version: String,
+    pub private_key_file: String,
+    pub v2_only_sign_requests: Option<bool>,
+    pub v2_only_authenticate: Option<bool>,
 }
 
 impl MAuthInfo {
@@ -129,7 +136,10 @@ impl MAuthInfo {
         Ok(common_section_typed)
     }
 
-    fn from_config_section(
+    /// Construct the MAuthInfo struct based on a passed-in ConfigFileSection instance. The
+    /// optional input_keystore is present to support internal cloning and need not be provided
+    /// if being used outside of the crate.
+    pub fn from_config_section(
         section: &ConfigFileSection,
         input_keystore: Option<Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>>,
     ) -> Result<MAuthInfo, ConfigReadError> {
