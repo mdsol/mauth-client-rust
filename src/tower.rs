@@ -33,7 +33,7 @@ where
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let mut cloned = self.clone();
         Box::pin(async move {
-            match cloned.mauth_info.validate_request_v2(request).await {
+            match cloned.mauth_info.validate_request(request).await {
                 Ok(valid_request) => match cloned.service.call(valid_request).await {
                     Ok(response) => Ok(response),
                     Err(err) => Err(err.into()),

@@ -73,7 +73,7 @@ pub struct MAuthInfo {
     remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
     mauth_uri_base: hyper::Uri,
     sign_with_v1_also: bool,
-    allow_v1_response_auth: bool,
+    allow_v1_auth: bool,
 }
 
 /// This struct holds the digest information required to perform the signing operation. It is a
@@ -83,6 +83,17 @@ pub struct MAuthInfo {
 pub struct BodyDigest {
     digest_str: String,
     body_data: Vec<u8>,
+}
+
+/// This struct holds the app UUID for a validated request. It is meant to be used with the
+/// Extension setup in Hyper requests, where it is placed in requests that passed authentication.
+/// The custom struct makes it clearer that the request has passed and this is an authenticated
+/// app UUID and not some random UUID that some other component put in place for some other
+/// purpose.
+#[cfg(feature = "server")]
+#[derive(Debug, Clone)]
+pub struct ValidatedRequestDetails {
+    pub app_uuid: Uuid,
 }
 
 #[derive(Deserialize, Clone)]
@@ -140,7 +151,7 @@ impl MAuthInfo {
             private_key: RsaKeyPair::from_der(&der_key_data)?,
             openssl_private_key: openssl_key.rsa()?,
             sign_with_v1_also: !section.v2_only_sign_requests.unwrap_or(false),
-            allow_v1_response_auth: !section.v2_only_authenticate.unwrap_or(false),
+            allow_v1_auth: !section.v2_only_authenticate.unwrap_or(false),
         })
     }
 
@@ -223,10 +234,45 @@ impl MAuthInfo {
         match self.validate_response_v2(&status, headers, &body_raw).await {
             Ok(body) => Ok(body),
             Err(v2_error) => {
-                if self.allow_v1_response_auth {
+                if self.allow_v1_auth {
                     self.validate_response_v1(&status, headers, &body_raw).await
                 } else {
                     Err(v2_error)
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "server")]
+    async fn validate_request(
+        &self,
+        mut req: Request<Body>,
+    ) -> Result<Request<Body>, MAuthValidationError> {
+        let body_bytes = hyper::body::to_bytes(req.body_mut())
+            .await
+            .map_err(|_| MAuthValidationError::InvalidBody)?;
+        match self.validate_request_v2(&req, &body_bytes).await {
+            Ok(host_app_uuid) => {
+                req.extensions_mut().insert(ValidatedRequestDetails {
+                    app_uuid: host_app_uuid,
+                });
+                *req.body_mut() = Body::from(body_bytes);
+                Ok(req)
+            }
+            Err(err) => {
+                if self.allow_v1_auth {
+                    match self.validate_request_v1(&req, &body_bytes).await {
+                        Ok(host_app_uuid) => {
+                            req.extensions_mut().insert(ValidatedRequestDetails {
+                                app_uuid: host_app_uuid,
+                            });
+                            *req.body_mut() = Body::from(body_bytes);
+                            Ok(req)
+                        }
+                        Err(err) => Err(err),
+                    }
+                } else {
+                    Err(err)
                 }
             }
         }
@@ -250,12 +296,10 @@ impl MAuthInfo {
     #[cfg(feature = "server")]
     async fn validate_request_v2(
         &self,
-        mut req: Request<Body>,
-    ) -> Result<Request<Body>, MAuthValidationError> {
+        req: &Request<Body>,
+        body_bytes: &bytes::Bytes,
+    ) -> Result<Uuid, MAuthValidationError> {
         let mut hasher = Sha512::default();
-        let body_bytes = hyper::body::to_bytes(req.body_mut())
-            .await
-            .map_err(|_| MAuthValidationError::InvalidBody)?;
         hasher.update(&body_bytes);
 
         //retrieve and parse auth string
@@ -298,15 +342,59 @@ impl MAuthInfo {
                 );
                 match ring_key.verify(&string_to_sign.into_bytes(), &raw_signature) {
                     Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
-                    Ok(()) => {
-                        req.extensions_mut().insert(host_app_uuid);
-                        *req.body_mut() = Body::from(body_bytes);
-                        Ok(req)
-                    }
+                    Ok(()) => Ok(host_app_uuid),
                 }
             }
         }
-        // Ok(Request::from_parts(req_parts, Body::from(body_bytes))) // as dyn HttpBody<Data = B::Data, Error = B::Error>))
+    }
+
+    #[cfg(feature = "server")]
+    async fn validate_request_v1(
+        &self,
+        req: &Request<Body>,
+        body_bytes: &bytes::Bytes,
+    ) -> Result<Uuid, MAuthValidationError> {
+        //retrieve and parse auth string
+        let sig_header = req
+            .headers()
+            .get("X-MWS-Authentication")
+            .ok_or(MAuthValidationError::NoSig)?
+            .to_str()
+            .map_err(|_| MAuthValidationError::InvalidSignature)?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWS")?;
+
+        //retrieve and validate timestamp
+        let ts_str = req
+            .headers()
+            .get("X-MWS-Time")
+            .ok_or(MAuthValidationError::NoTime)?
+            .to_str()
+            .map_err(|_| MAuthValidationError::InvalidTime)?;
+        Self::validate_timestamp(ts_str)?;
+
+        //Compute response signing string
+        let mut hasher = Sha512::default();
+        let string_to_sign1 = format!("{}\n{}\n", req.method(), req.uri().path());
+        hasher.update(string_to_sign1.into_bytes());
+        hasher.update(&body_bytes);
+        let string_to_sign2 = format!("\n{}\n{}", &host_app_uuid, &ts_str);
+        hasher.update(string_to_sign2.into_bytes());
+        let sign_input: Vec<u8> = hex::encode(hasher.finalize()).into_bytes();
+
+        match self.get_app_pub_key(&host_app_uuid).await {
+            None => Err(MAuthValidationError::KeyUnavailable),
+            Some(pub_key) => {
+                let mut sign_output: Vec<u8> = vec![0; pub_key.size() as usize];
+                let len = pub_key
+                    .public_decrypt(&raw_signature, &mut sign_output, Padding::PKCS1)
+                    .unwrap();
+                if *sign_input.as_slice() == sign_output[0..len] {
+                    Ok(host_app_uuid)
+                } else {
+                    Err(MAuthValidationError::SignatureVerifyFailure)
+                }
+            }
+        }
     }
 
     fn get_signing_string_v2(
