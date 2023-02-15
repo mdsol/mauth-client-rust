@@ -310,7 +310,7 @@ impl MAuthInfo {
         body_bytes: &bytes::Bytes,
     ) -> Result<Uuid, MAuthValidationError> {
         let mut hasher = Sha512::default();
-        hasher.update(&body_bytes);
+        hasher.update(body_bytes);
 
         //retrieve and parse auth string
         let sig_header = req
@@ -386,7 +386,7 @@ impl MAuthInfo {
         let mut hasher = Sha512::default();
         let string_to_sign1 = format!("{}\n{}\n", req.method(), req.uri().path());
         hasher.update(string_to_sign1.into_bytes());
-        hasher.update(&body_bytes);
+        hasher.update(body_bytes);
         let string_to_sign2 = format!("\n{}\n{}", &host_app_uuid, &ts_str);
         hasher.update(string_to_sign2.into_bytes());
         let sign_input: Vec<u8> = hex::encode(hasher.finalize()).into_bytes();
