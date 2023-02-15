@@ -39,4 +39,4 @@ thiserror = ">= 1.0.37"
 tokio = { version = ">= 1.0.1", features = ["rt-multi-thread", "macros"] }
 
 [features]
-server = ["tower", "futures-core"]
+tower-service = ["tower", "futures-core"]

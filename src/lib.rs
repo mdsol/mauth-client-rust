@@ -90,7 +90,7 @@ pub struct BodyDigest {
 /// The custom struct makes it clearer that the request has passed and this is an authenticated
 /// app UUID and not some random UUID that some other component put in place for some other
 /// purpose.
-#[cfg(feature = "server")]
+#[cfg(feature = "tower-service")]
 #[derive(Debug, Clone)]
 pub struct ValidatedRequestDetails {
     pub app_uuid: Uuid,
@@ -243,7 +243,7 @@ impl MAuthInfo {
         }
     }
 
-    #[cfg(feature = "server")]
+    #[cfg(feature = "tower-service")]
     async fn validate_request(
         &self,
         mut req: Request<Body>,
@@ -293,7 +293,7 @@ impl MAuthInfo {
         self.set_headers_v2(req, signature, &timestamp_str);
     }
 
-    #[cfg(feature = "server")]
+    #[cfg(feature = "tower-service")]
     async fn validate_request_v2(
         &self,
         req: &Request<Body>,
@@ -348,7 +348,7 @@ impl MAuthInfo {
         }
     }
 
-    #[cfg(feature = "server")]
+    #[cfg(feature = "tower-service")]
     async fn validate_request_v1(
         &self,
         req: &Request<Body>,
@@ -781,5 +781,5 @@ pub enum MAuthValidationError {
     SignatureVerifyFailure,
 }
 
-#[cfg(feature = "server")]
+#[cfg(feature = "tower-service")]
 pub mod tower;
