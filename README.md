@@ -31,3 +31,9 @@ match client.request(req).await {
     }
 }
 ```
+
+The optional `tower-service` feature provides for a Tower Layer and Service that will
+authenticate incoming requests via MAuth V2 or V2 and provide to the lower layers a
+validated app_uuid from the request via the ValidatedRequestDetails struct.
+
+License: MIT
