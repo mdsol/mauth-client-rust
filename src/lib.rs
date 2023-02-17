@@ -9,7 +9,7 @@
 //!
 //! ```no_run
 //! # use mauth_client::MAuthInfo;
-//! # use hyper::{Body, Client, Method, Request, Response};
+//! # use hyper::{Body, Client, Method, Request, Response, body::HttpBody};
 //! # use hyper_tls::HttpsConnector;
 //! # async fn make_signed_request() {
 //! let mauth_info = MAuthInfo::from_default_file().unwrap();
@@ -34,10 +34,15 @@
 //! }
 //! # }
 //! ```
+//!
+//! The optional `tower-service` feature provides for a Tower Layer and Service that will
+//! authenticate incoming requests via MAuth V2 or V2 and provide to the lower layers a
+//! validated app_uuid from the request via the ValidatedRequestDetails struct.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
+use base64::Engine;
 use chrono::prelude::*;
 use hyper::body::HttpBody;
 use hyper::header::HeaderValue;
@@ -51,6 +56,7 @@ use ring::signature::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha512};
+use thiserror::Error;
 use tokio::io;
 use uuid::Uuid;
 
@@ -68,10 +74,10 @@ pub struct MAuthInfo {
     app_id: Uuid,
     private_key: RsaKeyPair,
     openssl_private_key: Rsa<Private>,
+    remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
     mauth_uri_base: hyper::Uri,
-    remote_key_store: RefCell<HashMap<Uuid, Rsa<Public>>>,
     sign_with_v1_also: bool,
-    allow_v1_response_auth: bool,
+    allow_v1_auth: bool,
 }
 
 /// This struct holds the digest information required to perform the signing operation. It is a
@@ -83,14 +89,28 @@ pub struct BodyDigest {
     body_data: Vec<u8>,
 }
 
-#[derive(Deserialize)]
-struct ConfigFileSection {
-    app_uuid: String,
-    mauth_baseurl: String,
-    mauth_api_version: String,
-    private_key_file: String,
-    v2_only_sign_requests: Option<bool>,
-    v2_only_authenticate: Option<bool>,
+/// This struct holds the app UUID for a validated request. It is meant to be used with the
+/// Extension setup in Hyper requests, where it is placed in requests that passed authentication.
+/// The custom struct makes it clearer that the request has passed and this is an authenticated
+/// app UUID and not some random UUID that some other component put in place for some other
+/// purpose.
+#[cfg(feature = "tower-service")]
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ValidatedRequestDetails {
+    pub app_uuid: Uuid,
+}
+
+/// All of the configuration data needed to set up a MAuthInfo struct. Implements Deserialize
+/// to be read from a YAML file easily, or can be created manually.
+#[derive(Deserialize, Clone)]
+pub struct ConfigFileSection {
+    pub app_uuid: String,
+    pub mauth_baseurl: String,
+    pub mauth_api_version: String,
+    pub private_key_file: String,
+    pub v2_only_sign_requests: Option<bool>,
+    pub v2_only_authenticate: Option<bool>,
 }
 
 impl MAuthInfo {
@@ -98,6 +118,10 @@ impl MAuthInfo {
     /// present in the current user's home directory. Returns an enum error type that includes the
     /// error types of all crates used.
     pub fn from_default_file() -> Result<MAuthInfo, ConfigReadError> {
+        Self::from_config_section(&Self::config_section_from_default_file()?, None)
+    }
+
+    fn config_section_from_default_file() -> Result<ConfigFileSection, ConfigReadError> {
         let mut home = dirs::home_dir().unwrap();
         home.push(CONFIG_FILE);
         let config_data = std::fs::read_to_string(&home)?;
@@ -109,10 +133,16 @@ impl MAuthInfo {
             .ok_or(ConfigReadError::InvalidFile(None))?;
         let common_section_typed: ConfigFileSection =
             serde_yaml::from_value(common_section.clone())?;
-        Self::from_config_section(common_section_typed)
+        Ok(common_section_typed)
     }
 
-    fn from_config_section(section: ConfigFileSection) -> Result<MAuthInfo, ConfigReadError> {
+    /// Construct the MAuthInfo struct based on a passed-in ConfigFileSection instance. The
+    /// optional input_keystore is present to support internal cloning and need not be provided
+    /// if being used outside of the crate.
+    pub fn from_config_section(
+        section: &ConfigFileSection,
+        input_keystore: Option<Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>>,
+    ) -> Result<MAuthInfo, ConfigReadError> {
         let full_uri: hyper::Uri = format!(
             "{}/mauth/{}/security_tokens/",
             &section.mauth_baseurl, &section.mauth_api_version
@@ -126,11 +156,12 @@ impl MAuthInfo {
         Ok(MAuthInfo {
             app_id: Uuid::parse_str(&section.app_uuid)?,
             mauth_uri_base: full_uri,
-            remote_key_store: RefCell::new(HashMap::new()),
+            remote_key_store: input_keystore
+                .unwrap_or_else(|| Arc::new(RwLock::new(HashMap::new()))),
             private_key: RsaKeyPair::from_der(&der_key_data)?,
             openssl_private_key: openssl_key.rsa()?,
             sign_with_v1_also: !section.v2_only_sign_requests.unwrap_or(false),
-            allow_v1_response_auth: !section.v2_only_authenticate.unwrap_or(false),
+            allow_v1_auth: !section.v2_only_authenticate.unwrap_or(false),
         })
     }
 
@@ -210,17 +241,48 @@ impl MAuthInfo {
         let body_raw: Vec<u8> = Self::bytes_from_body(response.body_mut()).await?;
         let status = response.status();
         let headers = response.headers();
-        match self
-            .validate_response_v2(&status, headers, &body_raw)
-            .await
-        {
+        match self.validate_response_v2(&status, headers, &body_raw).await {
             Ok(body) => Ok(body),
             Err(v2_error) => {
-                if self.allow_v1_response_auth {
-                    self.validate_response_v1(&status, headers, &body_raw)
-                        .await
+                if self.allow_v1_auth {
+                    self.validate_response_v1(&status, headers, &body_raw).await
                 } else {
                     Err(v2_error)
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "tower-service")]
+    async fn validate_request(
+        &self,
+        mut req: Request<Body>,
+    ) -> Result<Request<Body>, MAuthValidationError> {
+        let body_bytes = hyper::body::to_bytes(req.body_mut())
+            .await
+            .map_err(|_| MAuthValidationError::InvalidBody)?;
+        match self.validate_request_v2(&req, &body_bytes).await {
+            Ok(host_app_uuid) => {
+                req.extensions_mut().insert(ValidatedRequestDetails {
+                    app_uuid: host_app_uuid,
+                });
+                *req.body_mut() = Body::from(body_bytes);
+                Ok(req)
+            }
+            Err(err) => {
+                if self.allow_v1_auth {
+                    match self.validate_request_v1(&req, &body_bytes).await {
+                        Ok(host_app_uuid) => {
+                            req.extensions_mut().insert(ValidatedRequestDetails {
+                                app_uuid: host_app_uuid,
+                            });
+                            *req.body_mut() = Body::from(body_bytes);
+                            Ok(req)
+                        }
+                        Err(err) => Err(err),
+                    }
+                } else {
+                    Err(err)
                 }
             }
         }
@@ -241,16 +303,117 @@ impl MAuthInfo {
         self.set_headers_v2(req, signature, &timestamp_str);
     }
 
+    #[cfg(feature = "tower-service")]
+    async fn validate_request_v2(
+        &self,
+        req: &Request<Body>,
+        body_bytes: &bytes::Bytes,
+    ) -> Result<Uuid, MAuthValidationError> {
+        let mut hasher = Sha512::default();
+        hasher.update(body_bytes);
+
+        //retrieve and parse auth string
+        let sig_header = req
+            .headers()
+            .get("MCC-Authentication")
+            .ok_or(MAuthValidationError::NoSig)?
+            .to_str()
+            .map_err(|_| MAuthValidationError::InvalidSignature)?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWSV2")?;
+
+        //retrieve and validate timestamp
+        let ts_str = req
+            .headers()
+            .get("MCC-Time")
+            .ok_or(MAuthValidationError::NoTime)?
+            .to_str()
+            .map_err(|_| MAuthValidationError::InvalidTime)?;
+        Self::validate_timestamp(ts_str)?;
+
+        //Compute response signing string
+        let encoded_query: String = req.uri().query().map_or("".to_string(), Self::encode_query);
+
+        let string_to_sign = format!(
+            "{}\n{}\n{}\n{}\n{}\n{}",
+            req.method(),
+            Self::normalize_url(req.uri().path()),
+            &hex::encode(hasher.finalize()),
+            &host_app_uuid,
+            &ts_str,
+            &encoded_query
+        );
+
+        match self.get_app_pub_key(&host_app_uuid).await {
+            None => Err(MAuthValidationError::KeyUnavailable),
+            Some(pub_key) => {
+                let ring_key = UnparsedPublicKey::new(
+                    &RSA_PKCS1_2048_8192_SHA512,
+                    bytes::Bytes::from(pub_key.public_key_to_der_pkcs1().unwrap()),
+                );
+                match ring_key.verify(&string_to_sign.into_bytes(), &raw_signature) {
+                    Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
+                    Ok(()) => Ok(host_app_uuid),
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "tower-service")]
+    async fn validate_request_v1(
+        &self,
+        req: &Request<Body>,
+        body_bytes: &bytes::Bytes,
+    ) -> Result<Uuid, MAuthValidationError> {
+        //retrieve and parse auth string
+        let sig_header = req
+            .headers()
+            .get("X-MWS-Authentication")
+            .ok_or(MAuthValidationError::NoSig)?
+            .to_str()
+            .map_err(|_| MAuthValidationError::InvalidSignature)?;
+        let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWS")?;
+
+        //retrieve and validate timestamp
+        let ts_str = req
+            .headers()
+            .get("X-MWS-Time")
+            .ok_or(MAuthValidationError::NoTime)?
+            .to_str()
+            .map_err(|_| MAuthValidationError::InvalidTime)?;
+        Self::validate_timestamp(ts_str)?;
+
+        //Compute response signing string
+        let mut hasher = Sha512::default();
+        let string_to_sign1 = format!("{}\n{}\n", req.method(), req.uri().path());
+        hasher.update(string_to_sign1.into_bytes());
+        hasher.update(body_bytes);
+        let string_to_sign2 = format!("\n{}\n{}", &host_app_uuid, &ts_str);
+        hasher.update(string_to_sign2.into_bytes());
+        let sign_input: Vec<u8> = hex::encode(hasher.finalize()).into_bytes();
+
+        match self.get_app_pub_key(&host_app_uuid).await {
+            None => Err(MAuthValidationError::KeyUnavailable),
+            Some(pub_key) => {
+                let mut sign_output: Vec<u8> = vec![0; pub_key.size() as usize];
+                let len = pub_key
+                    .public_decrypt(&raw_signature, &mut sign_output, Padding::PKCS1)
+                    .unwrap();
+                if *sign_input.as_slice() == sign_output[0..len] {
+                    Ok(host_app_uuid)
+                } else {
+                    Err(MAuthValidationError::SignatureVerifyFailure)
+                }
+            }
+        }
+    }
+
     fn get_signing_string_v2(
         &self,
         req: &Request<Body>,
         body_digest: &BodyDigest,
         timestamp_str: &str,
     ) -> String {
-        let encoded_query: String = req
-            .uri()
-            .query()
-            .map_or("".to_string(), Self::encode_query);
+        let encoded_query: String = req.uri().query().map_or("".to_string(), Self::encode_query);
         format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             req.method(),
@@ -272,7 +435,8 @@ impl MAuthInfo {
                 &mut signature,
             )
             .unwrap();
-        base64::encode(&signature)
+        let b64 = base64::engine::general_purpose::STANDARD;
+        b64.encode(&signature)
     }
 
     fn set_headers_v2(&self, req: &mut Request<Body>, signature: String, timestamp_str: &str) {
@@ -297,7 +461,7 @@ impl MAuthInfo {
             .split('&')
             .map(|p| {
                 p.split('=')
-                    .map(|x| percent_decode_str(&x.replace("+", " ")).collect())
+                    .map(|x| percent_decode_str(&x.replace('+', " ")).collect())
                     .collect()
             })
             .collect();
@@ -350,12 +514,13 @@ impl MAuthInfo {
         let mut sign_output = vec![0; self.openssl_private_key.size() as usize];
         self.openssl_private_key
             .private_encrypt(
-                &hex::encode(&hasher.finalize()).into_bytes(),
+                &hex::encode(hasher.finalize()).into_bytes(),
                 &mut sign_output,
                 Padding::PKCS1,
             )
             .unwrap();
-        let signature = format!("MWS {}:{}", self.app_id, base64::encode(&sign_output));
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let signature = format!("MWS {}:{}", self.app_id, b64.encode(&sign_output));
 
         let headers = req.headers_mut();
         headers.insert("X-MWS-Time", HeaderValue::from_str(&timestamp_str).unwrap());
@@ -370,7 +535,7 @@ impl MAuthInfo {
             .parse()
             .map_err(|_| MAuthValidationError::InvalidTime)?;
         let ts_diff = ts_num - Utc::now().timestamp();
-        if ts_diff > 300 || ts_diff < -300 {
+        if !(-300..=300).contains(&ts_diff) {
             Err(MAuthValidationError::InvalidTime)
         } else {
             Ok(())
@@ -398,7 +563,9 @@ impl MAuthInfo {
         let signature_encoded_string = header_split
             .next()
             .ok_or(MAuthValidationError::InvalidSignature)?;
-        let raw_signature: Vec<u8> = base64::decode(&signature_encoded_string)
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let raw_signature: Vec<u8> = b64
+            .decode(signature_encoded_string)
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
         Ok((host_app_uuid, raw_signature))
     }
@@ -439,7 +606,7 @@ impl MAuthInfo {
 
         //Compute response signing string
         let mut hasher = Sha512::default();
-        hasher.update(&body_raw);
+        hasher.update(body_raw);
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}",
             &status.as_u16(),
@@ -489,7 +656,7 @@ impl MAuthInfo {
         let mut hasher = Sha512::default();
         let string1 = format!("{}\n", &status.as_u16());
         hasher.update(&string1.into_bytes());
-        hasher.update(&body_raw);
+        hasher.update(body_raw);
         let string2 = format!("\n{}\n{}", &host_app_uuid, &ts_str);
         hasher.update(&string2.into_bytes());
         let sign_input: Vec<u8> = hex::encode(hasher.finalize()).into_bytes();
@@ -512,9 +679,11 @@ impl MAuthInfo {
     }
 
     async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Rsa<Public>> {
-        let mut key_store = self.remote_key_store.borrow_mut();
-        if let Some(pub_key) = key_store.get(app_uuid) {
-            return Some(pub_key.clone());
+        {
+            let key_store = self.remote_key_store.read().unwrap();
+            if let Some(pub_key) = key_store.get(app_uuid) {
+                return Some(pub_key.clone());
+            }
         }
         let https = HttpsConnector::new();
         let client = Client::builder().build::<_, hyper::Body>(https);
@@ -549,6 +718,7 @@ impl MAuthInfo {
                     .and_then(|s| s.as_str())
                     .unwrap();
                 let pub_key = Rsa::public_key_from_pem(pub_key_str.as_bytes()).unwrap();
+                let mut key_store = self.remote_key_store.write().unwrap();
                 key_store.insert(*app_uuid, pub_key.clone());
                 Some(pub_key)
             }
@@ -563,43 +733,25 @@ mod protocol_test_suite;
 
 /// All of the possible errors that can take place when attempting to read a config file. Errors
 /// are specific to the libraries that created them, and include the details from those libraries.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ConfigReadError {
-    FileReadError(io::Error),
+    #[error("File Read Error: {0}")]
+    FileReadError(#[from] io::Error),
+    #[error("Not a valid maudit config file: {0:?}")]
     InvalidFile(Option<serde_yaml::Error>),
-    InvalidUri(http::uri::InvalidUri),
-    InvalidAppUuid(uuid::Error),
-    OpenSSLError(openssl::error::ErrorStack),
+    #[error("MAudit URI not valid: {0}")]
+    InvalidUri(#[from] http::uri::InvalidUri),
+    #[error("App UUID not valid: {0}")]
+    InvalidAppUuid(#[from] uuid::Error),
+    #[error("Key error: {0}")]
+    OpenSSLError(#[from] openssl::error::ErrorStack),
+    #[error("Key error")]
     RingKeyError(ring::error::KeyRejected),
-}
-
-impl From<io::Error> for ConfigReadError {
-    fn from(err: io::Error) -> ConfigReadError {
-        ConfigReadError::FileReadError(err)
-    }
 }
 
 impl From<serde_yaml::Error> for ConfigReadError {
     fn from(err: serde_yaml::Error) -> ConfigReadError {
         ConfigReadError::InvalidFile(Some(err))
-    }
-}
-
-impl From<http::uri::InvalidUri> for ConfigReadError {
-    fn from(err: http::uri::InvalidUri) -> ConfigReadError {
-        ConfigReadError::InvalidUri(err)
-    }
-}
-
-impl From<uuid::Error> for ConfigReadError {
-    fn from(err: uuid::Error) -> ConfigReadError {
-        ConfigReadError::InvalidAppUuid(err)
-    }
-}
-
-impl From<openssl::error::ErrorStack> for ConfigReadError {
-    fn from(err: openssl::error::ErrorStack) -> ConfigReadError {
-        ConfigReadError::OpenSSLError(err)
     }
 }
 
@@ -610,23 +762,34 @@ impl From<ring::error::KeyRejected> for ConfigReadError {
 }
 
 /// All of the possible errors that can take place when attempting to verify a response signature
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum MAuthValidationError {
     /// The timestamp of the response was either invalid or outside of the permitted
     /// range
+    #[error("The timestamp of the response was either invalid or outside of the permitted range")]
     InvalidTime,
     /// The MAuth signature of the response was either missing or incorrectly formatted
+    #[error("The MAuth signature of the response was either missing or incorrectly formatted")]
     InvalidSignature,
     /// The timestamp header of the response was missing
+    #[error("The timestamp header of the response was missing")]
     NoTime,
     /// The signature header of the response was missing
+    #[error("The signature header of the response was missing")]
     NoSig,
     /// An error occurred while attempting to retrieve part of the response body
+    #[error("An error occurred while attempting to retrieve part of the response body")]
     ResponseProblem,
     /// The response body failed to parse
+    #[error("The response body failed to parse")]
     InvalidBody,
     /// Attempt to retrieve a key to verify the response failed
+    #[error("Attempt to retrieve a key to verify the response failed")]
     KeyUnavailable,
     /// The body of the response did not match the signature
+    #[error("The body of the response did not match the signature")]
     SignatureVerifyFailure,
 }
+
+#[cfg(feature = "tower-service")]
+pub mod tower;
