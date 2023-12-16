@@ -1,7 +1,7 @@
 //! Structs and impls related to providing a Tower Service and Layer to verify incoming requests
 
 use futures_core::future::BoxFuture;
-use hyper::{body::Body, Request};
+use hyper::{body::{Body, Buf}, Request};
 use openssl::{pkey::Public, rsa::Rsa};
 use std::collections::HashMap;
 use std::error::Error;
@@ -21,11 +21,12 @@ pub struct MAuthValidationService<S> {
     service: S,
 }
 
-impl<S> Service<Request<Body>> for MAuthValidationService<S>
+impl<S, B> Service<Request<B>> for MAuthValidationService<S>
 where
-    S: Service<Request<Body>> + Send + Clone + 'static,
+    S: Service<Request<B>> + Send + Clone + 'static,
     S::Future: Send + 'static,
     S::Error: Into<Box<dyn Error + Sync + Send>>,
+    B: Body + Buf + Send + Sync + 'static,
 {
     type Response = S::Response;
     type Error = Box<dyn Error + Sync + Send>;
@@ -35,7 +36,7 @@ where
         self.service.poll_ready(cx).map_err(|e| e.into())
     }
 
-    fn call(&mut self, request: Request<Body>) -> Self::Future {
+    fn call(&mut self, request: Request<B>) -> Self::Future {
         let mut cloned = self.clone();
         Box::pin(async move {
             match cloned.mauth_info.validate_request(request).await {
@@ -72,7 +73,8 @@ pub struct MAuthValidationLayer {
     remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
 }
 
-impl<S> Layer<S> for MAuthValidationLayer {
+impl<S> Layer<S> for MAuthValidationLayer
+{
     type Service = MAuthValidationService<S>;
 
     fn layer(&self, service: S) -> Self::Service {

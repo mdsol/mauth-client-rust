@@ -1,5 +1,5 @@
 use crate::{ConfigFileSection, MAuthInfo};
-use hyper::{Method, Request};
+use reqwest::{Request, Method};
 use serde::Deserialize;
 use tokio::fs;
 
@@ -67,10 +67,11 @@ async fn test_string_to_sign(file_name: String) {
     };
 
     let (body, digest) = MAuthInfo::build_body_with_digest_from_bytes(body_data);
-    let mut req = Request::new(body);
-    *req.method_mut() = Method::from_bytes(request_shape.verb.as_bytes()).unwrap();
-    let fixed_url = request_shape.url.replace(" ", "%20");
-    *req.uri_mut() = fixed_url.parse().unwrap();
+    // It seems the Url class really doesn't like relative URLs
+    let fixed_url = format!("http://a.com{}", request_shape.url.replace(" ", "%20"));
+    let method = Method::from_bytes(request_shape.verb.as_bytes()).unwrap();
+    let mut req = Request::new(method, fixed_url.parse().unwrap());
+    *req.body_mut() = Some(body);
     let sts = mauth_info.get_signing_string_v2(&req, &digest, &req_time.to_string());
 
     assert_eq!(expected_string_to_sign, sts);
@@ -103,8 +104,7 @@ async fn test_generate_headers(file_name: String) {
     let auth_headers: serde_json::Value =
         serde_json::from_slice(&fs::read(authz_file_path).await.unwrap()).unwrap();
 
-    let (body, _) = MAuthInfo::build_body_with_digest("".to_string());
-    let mut request = Request::new(body);
+    let mut request = Request::new(Method::GET, url::Url::parse("http://www.a.com/").unwrap());
     mauth_info.set_headers_v2(&mut request, sig, &req_time.to_string());
 
     let headers = request.headers();
