@@ -26,7 +26,8 @@ where
     S: Service<Request<B>> + Send + Clone + 'static,
     S::Future: Send + 'static,
     S::Error: Into<Box<dyn Error + Sync + Send>>,
-    B: Body + Buf + Send + Sync + 'static,
+    B: Body + Send + Sync + 'static,
+    B::Data: Buf + Send + Sync + 'static,
 {
     type Response = S::Response;
     type Error = Box<dyn Error + Sync + Send>;

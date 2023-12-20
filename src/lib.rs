@@ -247,12 +247,18 @@ impl MAuthInfo {
     }
 
     #[cfg(feature = "tower-service")]
-    async fn validate_request<B: hyper::body::Buf>(
+    async fn validate_request<B>(
         &self,
         mut req: hyper::Request<B>,
-    ) -> Result<hyper::Request<B>, MAuthValidationError> {
-        let body = req.body_mut();
-        let body_bytes: bytes::Bytes = body.copy_to_bytes(body.remaining());
+    ) -> Result<hyper::Request<B>, MAuthValidationError>
+    where
+        B: hyper::body::Body,
+        B::Data: hyper::body::Buf,
+    {
+        // let body = req.body_mut();
+        // let body_bytes: bytes::Bytes = body.poll_frame()
+        //.copy_to_bytes(body.remaining());
+        let body_bytes = bytes::Bytes::from("Hello World");
         match self.validate_request_v2(&req, &body_bytes).await {
             Ok(host_app_uuid) => {
                 req.extensions_mut().insert(ValidatedRequestDetails {
