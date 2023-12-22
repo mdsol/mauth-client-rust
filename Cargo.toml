@@ -13,10 +13,10 @@ keywords = ["security", "authentication", "web"]
 categories = ["authentication", "web-programming"]
 
 [dependencies]
-ring = ">= 0.16.19"
-hyper = { version = ">= 0.14.2", features = ["client", "http1"] }
-reqwest = { version = "*", features = ["json"] }
-url = "*"
+ring = ">= 0.17.7"
+hyper = { version = ">= 1.0.0", features = ["client", "http1"] }
+reqwest = { version = ">= 0.11.23", features = ["json"] }
+url = ">= 2.5.0"
 serde = { version = ">= 1.0.85", features = ["derive"] }
 serde_json = ">= 1.0.0"
 serde_yaml = ">= 0.8.0"
@@ -31,9 +31,9 @@ hex = ">= 0.4.0"
 openssl = ">= 0.10.0"
 regex = { version = "1", default_features = false, features = ["std"] }
 bytes = ">= 1.0.0"
-http = ">= 0.2.3"
+http = ">= 1.0.0"
 tower = { version = ">= 0.4.13", optional = true }
-axum = { version = "*", optional = true }
+axum = { version = ">= 0.7.2", optional = true }
 futures-core = { version = ">= 0.3.25", optional = true }
 thiserror = ">= 1.0.37"
 
