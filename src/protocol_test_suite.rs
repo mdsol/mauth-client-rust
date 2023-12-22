@@ -1,5 +1,5 @@
 use crate::{ConfigFileSection, MAuthInfo};
-use reqwest::{Request, Method};
+use reqwest::{Method, Request};
 use serde::Deserialize;
 use tokio::fs;
 

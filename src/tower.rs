@@ -1,7 +1,7 @@
 //! Structs and impls related to providing a Tower Service and Layer to verify incoming requests
 
-use futures_core::future::BoxFuture;
 use axum::extract::Request;
+use futures_core::future::BoxFuture;
 use openssl::{pkey::Public, rsa::Rsa};
 use std::collections::HashMap;
 use std::error::Error;
@@ -72,8 +72,7 @@ pub struct MAuthValidationLayer {
     remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
 }
 
-impl<S> Layer<S> for MAuthValidationLayer
-{
+impl<S> Layer<S> for MAuthValidationLayer {
     type Service = MAuthValidationService<S>;
 
     fn layer(&self, service: S) -> Self::Service {

@@ -32,7 +32,7 @@
 //! ```
 //!
 //! The optional `axum-service` feature provides for a Tower Layer and Service that will
-//! authenticate incoming requests via MAuth V2 or V2 and provide to the lower layers a
+//! authenticate incoming requests via MAuth V2 or V1 and provide to the lower layers a
 //! validated app_uuid from the request via the ValidatedRequestDetails struct.
 
 use std::collections::HashMap;
@@ -40,9 +40,9 @@ use std::sync::{Arc, RwLock};
 
 use base64::Engine;
 use chrono::prelude::*;
-use reqwest::{Client, Request, Body, Url, Method, header::HeaderValue, Response};
 use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::{Captures, Regex};
+use reqwest::{header::HeaderValue, Body, Client, Method, Request, Response, Url};
 use ring::rand::SystemRandom;
 use ring::signature::{
     RsaKeyPair, UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA512, RSA_PKCS1_SHA512,
@@ -234,11 +234,15 @@ impl MAuthInfo {
         let status = response.status();
         let headers = response.headers().clone();
         let body_raw = response.bytes().await.unwrap();
-        match self.validate_response_v2(&status, &headers, &body_raw).await {
+        match self
+            .validate_response_v2(&status, &headers, &body_raw)
+            .await
+        {
             Ok(body) => Ok(body),
             Err(v2_error) => {
                 if self.allow_v1_auth {
-                    self.validate_response_v1(&status, &headers, &body_raw).await
+                    self.validate_response_v1(&status, &headers, &body_raw)
+                        .await
                 } else {
                     Err(v2_error)
                 }
@@ -250,10 +254,11 @@ impl MAuthInfo {
     async fn validate_request(
         &self,
         req: axum::extract::Request,
-    ) -> Result<axum::extract::Request, MAuthValidationError>
-    {
+    ) -> Result<axum::extract::Request, MAuthValidationError> {
         let (mut parts, body) = req.into_parts();
-        let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|_| MAuthValidationError::InvalidBody)?;
+        let body_bytes = axum::body::to_bytes(body, usize::MAX)
+            .await
+            .map_err(|_| MAuthValidationError::InvalidBody)?;
         match self.validate_request_v2(&parts, &body_bytes).await {
             Ok(host_app_uuid) => {
                 parts.extensions.insert(ValidatedRequestDetails {
