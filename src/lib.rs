@@ -31,7 +31,7 @@
 //! # }
 //! ```
 //!
-//! The optional `tower-service` feature provides for a Tower Layer and Service that will
+//! The optional `axum-service` feature provides for a Tower Layer and Service that will
 //! authenticate incoming requests via MAuth V2 or V2 and provide to the lower layers a
 //! validated app_uuid from the request via the ValidatedRequestDetails struct.
 
@@ -87,7 +87,7 @@ pub struct BodyDigest {
 /// The custom struct makes it clearer that the request has passed and this is an authenticated
 /// app UUID and not some random UUID that some other component put in place for some other
 /// purpose.
-#[cfg(feature = "tower-service")]
+#[cfg(feature = "axum-service")]
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ValidatedRequestDetails {
@@ -246,36 +246,33 @@ impl MAuthInfo {
         }
     }
 
-    #[cfg(feature = "tower-service")]
-    async fn validate_request<B>(
+    #[cfg(feature = "axum-service")]
+    async fn validate_request(
         &self,
-        mut req: hyper::Request<B>,
-    ) -> Result<hyper::Request<B>, MAuthValidationError>
-    where
-        B: hyper::body::Body,
-        B::Data: hyper::body::Buf,
+        req: axum::extract::Request,
+    ) -> Result<axum::extract::Request, MAuthValidationError>
     {
-        // let body = req.body_mut();
-        // let body_bytes: bytes::Bytes = body.poll_frame()
-        //.copy_to_bytes(body.remaining());
-        let body_bytes = bytes::Bytes::from("Hello World");
-        match self.validate_request_v2(&req, &body_bytes).await {
+        let (mut parts, body) = req.into_parts();
+        let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|_| MAuthValidationError::InvalidBody)?;
+        match self.validate_request_v2(&parts, &body_bytes).await {
             Ok(host_app_uuid) => {
-                req.extensions_mut().insert(ValidatedRequestDetails {
+                parts.extensions.insert(ValidatedRequestDetails {
                     app_uuid: host_app_uuid,
                 });
-                // *req.body_mut() = Body::from(body_bytes);
-                Ok(req)
+                let new_body = axum::body::Body::from(body_bytes);
+                let new_request = axum::extract::Request::from_parts(parts, new_body);
+                Ok(new_request)
             }
             Err(err) => {
                 if self.allow_v1_auth {
-                    match self.validate_request_v1(&req, &body_bytes).await {
+                    match self.validate_request_v1(&parts, &body_bytes).await {
                         Ok(host_app_uuid) => {
-                            req.extensions_mut().insert(ValidatedRequestDetails {
+                            parts.extensions.insert(ValidatedRequestDetails {
                                 app_uuid: host_app_uuid,
                             });
-                            // *req.body_mut() = Body::from(body_bytes);
-                            Ok(req)
+                            let new_body = axum::body::Body::from(body_bytes);
+                            let new_request = axum::extract::Request::from_parts(parts, new_body);
+                            Ok(new_request)
                         }
                         Err(err) => Err(err),
                     }
@@ -301,10 +298,10 @@ impl MAuthInfo {
         self.set_headers_v2(req, signature, &timestamp_str);
     }
 
-    #[cfg(feature = "tower-service")]
-    async fn validate_request_v2<B>(
+    #[cfg(feature = "axum-service")]
+    async fn validate_request_v2(
         &self,
-        req: &hyper::Request<B>,
+        req: &http::request::Parts,
         body_bytes: &bytes::Bytes,
     ) -> Result<Uuid, MAuthValidationError> {
         let mut hasher = Sha512::default();
@@ -312,7 +309,7 @@ impl MAuthInfo {
 
         //retrieve and parse auth string
         let sig_header = req
-            .headers()
+            .headers
             .get("MCC-Authentication")
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
@@ -321,7 +318,7 @@ impl MAuthInfo {
 
         //retrieve and validate timestamp
         let ts_str = req
-            .headers()
+            .headers
             .get("MCC-Time")
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
@@ -329,12 +326,12 @@ impl MAuthInfo {
         Self::validate_timestamp(ts_str)?;
 
         //Compute response signing string
-        let encoded_query: String = req.uri().query().map_or("".to_string(), Self::encode_query);
+        let encoded_query: String = req.uri.query().map_or("".to_string(), Self::encode_query);
 
         let string_to_sign = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            req.method(),
-            Self::normalize_url(req.uri().path()),
+            req.method,
+            Self::normalize_url(req.uri.path()),
             &hex::encode(hasher.finalize()),
             &host_app_uuid,
             &ts_str,
@@ -356,15 +353,15 @@ impl MAuthInfo {
         }
     }
 
-    #[cfg(feature = "tower-service")]
-    async fn validate_request_v1<B>(
+    #[cfg(feature = "axum-service")]
+    async fn validate_request_v1(
         &self,
-        req: &hyper::Request<B>,
+        req: &http::request::Parts,
         body_bytes: &bytes::Bytes,
     ) -> Result<Uuid, MAuthValidationError> {
         //retrieve and parse auth string
         let sig_header = req
-            .headers()
+            .headers
             .get("X-MWS-Authentication")
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
@@ -373,7 +370,7 @@ impl MAuthInfo {
 
         //retrieve and validate timestamp
         let ts_str = req
-            .headers()
+            .headers
             .get("X-MWS-Time")
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
@@ -382,7 +379,7 @@ impl MAuthInfo {
 
         //Compute response signing string
         let mut hasher = Sha512::default();
-        let string_to_sign1 = format!("{}\n{}\n", req.method(), req.uri().path());
+        let string_to_sign1 = format!("{}\n{}\n", req.method, req.uri.path());
         hasher.update(string_to_sign1.into_bytes());
         hasher.update(body_bytes);
         let string_to_sign2 = format!("\n{}\n{}", &host_app_uuid, &ts_str);
@@ -760,5 +757,5 @@ pub enum MAuthValidationError {
     SignatureVerifyFailure,
 }
 
-#[cfg(feature = "tower-service")]
+#[cfg(feature = "axum-service")]
 pub mod tower;

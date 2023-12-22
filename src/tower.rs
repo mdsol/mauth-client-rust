@@ -1,7 +1,7 @@
 //! Structs and impls related to providing a Tower Service and Layer to verify incoming requests
 
 use futures_core::future::BoxFuture;
-use hyper::{body::{Body, Buf}, Request};
+use axum::extract::Request;
 use openssl::{pkey::Public, rsa::Rsa};
 use std::collections::HashMap;
 use std::error::Error;
@@ -21,13 +21,11 @@ pub struct MAuthValidationService<S> {
     service: S,
 }
 
-impl<S, B> Service<Request<B>> for MAuthValidationService<S>
+impl<S> Service<Request> for MAuthValidationService<S>
 where
-    S: Service<Request<B>> + Send + Clone + 'static,
+    S: Service<Request> + Send + Clone + 'static,
     S::Future: Send + 'static,
     S::Error: Into<Box<dyn Error + Sync + Send>>,
-    B: Body + Send + Sync + 'static,
-    B::Data: Buf + Send + Sync + 'static,
 {
     type Response = S::Response;
     type Error = Box<dyn Error + Sync + Send>;
@@ -37,7 +35,7 @@ where
         self.service.poll_ready(cx).map_err(|e| e.into())
     }
 
-    fn call(&mut self, request: Request<B>) -> Self::Future {
+    fn call(&mut self, request: Request) -> Self::Future {
         let mut cloned = self.clone();
         Box::pin(async move {
             match cloned.mauth_info.validate_request(request).await {
