@@ -1,6 +1,6 @@
 //! # mauth-client
 //!
-//! This crate allows users of the Hyper crate for making HTTP requests to sign those requests with
+//! This crate allows users of the Reqwest crate for making HTTP requests to sign those requests with
 //! the MAuth protocol, and verify the responses. Usage example:
 //!
 //! **Note**: This crate and Rust support within Medidata is considered experimental. Do not
@@ -159,7 +159,7 @@ impl MAuthInfo {
     }
 
     /// The MAuth Protocol requires computing a digest of the full text body of the request to be
-    /// sent. This is incompatible with the Hyper crate's structs, which do not allow the body of a
+    /// sent. This is incompatible with the Reqwest crate's structs, which do not allow the body of a
     /// constructed Request to be read. To solve this, use this function to compute both the body to
     /// be used to build the Request struct, and the digest struct to be passed to the
     /// [`sign_request_v2`](#method.sign_request_v2) function.
@@ -178,7 +178,7 @@ impl MAuthInfo {
     }
 
     /// The MAuth Protocol requires computing a digest of the full text body of the request to be
-    /// sent. This is incompatible with the Hyper crate's structs, which do not allow the body of a
+    /// sent. This is incompatible with the Reqwest crate's structs, which do not allow the body of a
     /// constructed Request to be read. To solve this, use this function to compute both the body to
     /// be used to build the Request struct, and the digest struct to be passed to the
     /// [`sign_request_v2`](#method.sign_request_v2) function.
@@ -211,7 +211,7 @@ impl MAuthInfo {
         }
     }
 
-    /// Validate that a Hyper Response contains a valid MAuth signature. Returns either the
+    /// Validate that a Reqwest Response contains a valid MAuth signature. Returns either the
     /// validated response body, or an error with details on why the signature was invalid.
     ///
     /// This method will attempt to validate a V2 signature first. If that fails, and if the

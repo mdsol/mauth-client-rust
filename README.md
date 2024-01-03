@@ -2,7 +2,7 @@
 
 ## mauth-client
 
-This crate allows users of the Hyper crate for making HTTP requests to sign those requests with
+This crate allows users of the Reqwest crate for making HTTP requests to sign those requests with
 the MAuth protocol, and verify the responses. Usage example:
 
 **Note**: This crate and Rust support within Medidata is considered experimental. Do not
