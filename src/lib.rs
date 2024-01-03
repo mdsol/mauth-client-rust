@@ -763,4 +763,4 @@ pub enum MAuthValidationError {
 }
 
 #[cfg(feature = "axum-service")]
-pub mod tower;
+pub mod axum_service;
