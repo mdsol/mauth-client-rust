@@ -1,6 +1,6 @@
 [package]
 name = "mauth-client"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Mason Gup <mgup@mdsol.com>"]
 edition = "2021"
 documentation = "https://docs.rs/mauth-client/"
