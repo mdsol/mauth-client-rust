@@ -26,16 +26,6 @@ fn main() {
         code_str.push_str(&format!(
             r#"
 #[tokio::test]
-async fn {formatted_name}_string_to_sign() {{
-    test_string_to_sign("{name}".to_string()).await;
-}}
-
-#[tokio::test]
-async fn {formatted_name}_sign_string() {{
-    test_sign_string("{name}".to_string()).await;
-}}
-
-#[tokio::test]
 async fn {formatted_name}_generate_headers() {{
     test_generate_headers("{name}".to_string()).await;
 }}

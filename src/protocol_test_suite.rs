@@ -6,14 +6,6 @@ use tokio::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
-struct RequestShape {
-    verb: String,
-    url: String,
-    body: Option<String>,
-    body_filepath: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct TestSignConfig {
     app_uuid: String,
     request_time: u64,
@@ -41,55 +33,6 @@ async fn setup_mauth_info() -> (MAuthInfo, u64) {
         MAuthInfo::from_config_section(&mock_config_section, None).unwrap(),
         sign_config.request_time,
     )
-}
-
-async fn test_string_to_sign(file_name: String) {
-    let (mauth_info, req_time) = setup_mauth_info().await;
-    let mut req_file_path = PathBuf::from(&BASE_PATH);
-    req_file_path.push(format!("{name}/{name}.req", name = &file_name));
-    let request_shape: RequestShape =
-        serde_json::from_slice(&fs::read(req_file_path).await.unwrap()).unwrap();
-
-    let mut sts_file_path = PathBuf::from(&BASE_PATH);
-    sts_file_path.push(format!("{name}/{name}.sts", name = &file_name));
-    let expected_string_to_sign =
-        String::from_utf8(fs::read(sts_file_path).await.unwrap()).unwrap();
-
-    let body_data = match (request_shape.body, request_shape.body_filepath) {
-        (Some(direct_str), None) => direct_str.as_bytes().to_vec(),
-        (None, Some(filename_str)) => {
-            let mut body_file_path = PathBuf::from(&BASE_PATH);
-            body_file_path.push(&file_name);
-            body_file_path.push(filename_str);
-            fs::read(body_file_path).await.unwrap()
-        }
-        _ => vec![],
-    };
-
-    let (body, digest) = MAuthInfo::build_body_with_digest_from_bytes(body_data);
-    // It seems the Url class really doesn't like relative URLs
-    let fixed_url = format!("http://a.com{}", request_shape.url.replace(" ", "%20"));
-    let method = Method::from_bytes(request_shape.verb.as_bytes()).unwrap();
-    let mut req = Request::new(method, fixed_url.parse().unwrap());
-    *req.body_mut() = Some(body);
-    let sts = mauth_info.get_signing_string_v2(&req, &digest, &req_time.to_string());
-
-    assert_eq!(expected_string_to_sign, sts);
-}
-
-async fn test_sign_string(file_name: String) {
-    let (mauth_info, _) = setup_mauth_info().await;
-    let mut sts_file_path = PathBuf::from(&BASE_PATH);
-    sts_file_path.push(format!("{name}/{name}.sts", name = &file_name));
-    let string_to_sign = String::from_utf8(fs::read(sts_file_path).await.unwrap()).unwrap();
-
-    let mut sig_file_path = PathBuf::from(&BASE_PATH);
-    sig_file_path.push(format!("{name}/{name}.sig", name = &file_name));
-    let expected_sig = String::from_utf8(fs::read(sig_file_path).await.unwrap()).unwrap();
-
-    let signed = mauth_info.sign_string_v2(string_to_sign);
-
-    assert_eq!(expected_sig, signed);
 }
 
 async fn test_generate_headers(file_name: String) {
