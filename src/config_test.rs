@@ -1,6 +1,4 @@
 use crate::{ConfigFileSection, ConfigReadError, MAuthInfo};
-use openssl::pkey::PKey;
-use openssl::rsa::Rsa;
 use tokio::fs;
 
 #[tokio::test]
@@ -48,14 +46,13 @@ async fn bad_key_file_returns_right_error() {
     };
     let load_result = MAuthInfo::from_config_section(&bad_config, None);
     fs::remove_file(&filename).await.unwrap();
-    assert!(matches!(load_result, Err(ConfigReadError::OpenSSLError(_))));
+    assert!(matches!(load_result, Err(ConfigReadError::FileReadError(_))));
 }
 
 #[tokio::test]
 async fn bad_uuid_returns_right_error() {
     let filename = "valid_key_file";
-    let rsa_obj = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
-    fs::write(&filename, rsa_obj.private_key_to_pem_pkcs8().unwrap())
+    fs::write(&filename, "invalid data")
         .await
         .unwrap();
     let bad_config = ConfigFileSection {

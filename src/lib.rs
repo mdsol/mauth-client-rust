@@ -40,16 +40,11 @@ use std::sync::{Arc, RwLock};
 
 use base64::Engine;
 use chrono::prelude::*;
-use reqwest::{header::HeaderValue, Body, Client, Method, Request, Response, Url};
-use ring::signature::{UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA512};
+use reqwest::{header::HeaderValue, Client, Method, Request, Url};
 use serde::Deserialize;
-use sha2::{Digest, Sha512};
 use thiserror::Error;
 use tokio::io;
 use uuid::Uuid;
-
-use openssl::pkey::Public;
-use openssl::rsa::{Padding, Rsa};
 
 use mauth_core::signer::Signer;
 
@@ -65,20 +60,11 @@ const CONFIG_FILE: &str = ".mauth_config.yml";
 /// makes the struct non-Sync.
 pub struct MAuthInfo {
     app_id: Uuid,
-    remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
+    remote_key_store: Arc<RwLock<HashMap<Uuid, String>>>,
     mauth_uri_base: Url,
     sign_with_v1_also: bool,
     allow_v1_auth: bool,
     signer: Signer,
-}
-
-/// This struct holds the digest information required to perform the signing operation. It is a
-/// custom struct to enforce the requirement that the
-/// [`build_body_with_digest`](#method.build_body_with_digest) function's output be passed to the
-/// signing methods.
-pub struct BodyDigest {
-    digest_str: String,
-    body_data: Vec<u8>,
 }
 
 /// This struct holds the app UUID for a validated request. It is meant to be used with the
@@ -133,7 +119,7 @@ impl MAuthInfo {
     /// if being used outside of the crate.
     pub fn from_config_section(
         section: &ConfigFileSection,
-        input_keystore: Option<Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>>,
+        input_keystore: Option<Arc<RwLock<HashMap<Uuid, String>>>>,
     ) -> Result<MAuthInfo, ConfigReadError> {
         let full_uri: Url = format!(
             "{}/mauth/{}/security_tokens/",
@@ -154,95 +140,13 @@ impl MAuthInfo {
         })
     }
 
-    /// The MAuth Protocol requires computing a digest of the full text body of the request to be
-    /// sent. This is incompatible with the Reqwest crate's structs, which do not allow the body of a
-    /// constructed Request to be read. To solve this, use this function to compute both the body to
-    /// be used to build the Request struct, and the digest struct to be passed to the
-    /// [`sign_request_v2`](#method.sign_request_v2) function.
-    ///
-    /// Note that this method must be used with all empty-body requests, including GET requests.
-    pub fn build_body_with_digest(body: String) -> (Body, BodyDigest) {
-        let mut hasher = Sha512::default();
-        hasher.update(body.as_bytes());
-        (
-            Body::from(body.clone()),
-            BodyDigest {
-                digest_str: hex::encode(hasher.finalize()),
-                body_data: body.into_bytes(),
-            },
-        )
-    }
-
-    /// The MAuth Protocol requires computing a digest of the full text body of the request to be
-    /// sent. This is incompatible with the Reqwest crate's structs, which do not allow the body of a
-    /// constructed Request to be read. To solve this, use this function to compute both the body to
-    /// be used to build the Request struct, and the digest struct to be passed to the
-    /// [`sign_request_v2`](#method.sign_request_v2) function.
-    ///
-    /// This function is an alternate version of the build_body_with_digest function that allows
-    /// the user to build request bodies from data that does not meet the Rust String type
-    /// requirements of being valid UTF8. Any binary data can be transformed into the appropriate
-    /// objects and signed using this function.
-    ///
-    /// Note that this method must be used with all empty-body requests, including GET requests.
-    pub fn build_body_with_digest_from_bytes(body: Vec<u8>) -> (Body, BodyDigest) {
-        let mut hasher = Sha512::default();
-        hasher.update(body.clone());
-        (
-            Body::from(body.clone()),
-            BodyDigest {
-                digest_str: hex::encode(hasher.finalize()),
-                body_data: body,
-            },
-        )
-    }
-
     /// This method determines how to sign the request automatically while respecting the
     /// `v2_only_sign_requests` flag in the config file. It always signs with the V2 algorithm and
     /// signature, and will also sign with the V1 algorithm, if the configuration permits.
-    pub fn sign_request(&self, req: &mut Request, body_digest: &BodyDigest) {
-        self.sign_request_v2(req, body_digest);
+    pub fn sign_request(&self, req: &mut Request, body: &Vec<u8>) {
+        self.sign_request_v2(req, body);
         if self.sign_with_v1_also {
-            self.sign_request_v1(req, body_digest);
-        }
-    }
-
-    /// Validate that a Reqwest Response contains a valid MAuth signature. Returns either the
-    /// validated response body, or an error with details on why the signature was invalid.
-    ///
-    /// This method will attempt to validate a V2 signature first. If that fails, and if the
-    /// flag `allow_v1_response_auth` is set in the configuration, it will then attempt to validate
-    /// a V1 signature. It will return `Ok(body)` if the request successfully authenticates,
-    /// otherwise, it will return the most recent validation error.
-    ///
-    /// This function requires a mutable borrow of the response and will consume the body contents,
-    /// as that is the only way to get the body out and perform the necessary hashing on it. Once
-    /// the validation is complete, the other properties of the response may be inspected as
-    /// needed.
-    ///
-    /// This method is `async` because it may make a HTTP request to the MAuth server in order to
-    /// retrieve the public key for the application that signed the response. Application keys are
-    /// cached in the MAuth struct, so the request only needs to be made once.
-    pub async fn validate_response(
-        &self,
-        response: Response,
-    ) -> Result<Vec<u8>, MAuthValidationError> {
-        let status = response.status();
-        let headers = response.headers().clone();
-        let body_raw = response.bytes().await.unwrap();
-        match self
-            .validate_response_v2(&status, &headers, &body_raw)
-            .await
-        {
-            Ok(body) => Ok(body),
-            Err(v2_error) => {
-                if self.allow_v1_auth {
-                    self.validate_response_v1(&status, &headers, &body_raw)
-                        .await
-                } else {
-                    Err(v2_error)
-                }
-            }
+            self.sign_request_v1(req, body);
         }
     }
 
@@ -292,7 +196,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v2(&self, req: &mut Request, body_digest: &BodyDigest) {
+    pub fn sign_request_v2(&self, req: &mut Request, body_data: &Vec<u8>) {
         let timestamp_str = Utc::now().timestamp().to_string();
         let some_string = self
             .signer
@@ -301,7 +205,7 @@ impl MAuthInfo {
                 req.method().as_str(),
                 req.url().path(),
                 req.url().query().unwrap_or(""),
-                &body_digest.body_data,
+                &body_data,
                 timestamp_str.clone(),
             )
             .unwrap();
@@ -340,7 +244,7 @@ impl MAuthInfo {
             Some(pub_key) => {
                 let verifier = Verifier::new(
                     host_app_uuid,
-                    String::from_utf8(pub_key.public_key_to_der_pkcs1().unwrap()).unwrap(),
+                    pub_key.clone(),
                 )
                 .unwrap();
                 match verifier.verify_signature(
@@ -389,7 +293,7 @@ impl MAuthInfo {
             Some(pub_key) => {
                 let verifier = Verifier::new(
                     host_app_uuid,
-                    String::from_utf8(pub_key.public_key_to_der_pkcs1().unwrap()).unwrap(),
+                    pub_key.clone(),
                 )
                 .unwrap();
                 match verifier.verify_signature(
@@ -425,7 +329,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v1(&self, req: &mut Request, body: &BodyDigest) {
+    pub fn sign_request_v1(&self, req: &mut Request, body_data: &Vec<u8>) {
         let timestamp_str = Utc::now().timestamp().to_string();
 
         let sig = self
@@ -435,7 +339,7 @@ impl MAuthInfo {
                 req.method().as_str(),
                 req.url().path(),
                 req.url().query().unwrap_or(""),
-                &body.body_data,
+                &body_data,
                 timestamp_str.clone(),
             )
             .unwrap();
@@ -485,103 +389,7 @@ impl MAuthInfo {
         Ok((host_app_uuid, raw_signature))
     }
 
-    async fn validate_response_v2(
-        &self,
-        status: &reqwest::StatusCode,
-        headers: &reqwest::header::HeaderMap,
-        body_raw: &[u8],
-    ) -> Result<Vec<u8>, MAuthValidationError> {
-        //retrieve and validate timestamp
-        let ts_str = headers
-            .get("MCC-Time")
-            .ok_or(MAuthValidationError::NoTime)?
-            .to_str()
-            .map_err(|_| MAuthValidationError::InvalidTime)?;
-        Self::validate_timestamp(ts_str)?;
-
-        //retrieve and parse auth string
-        let sig_header = headers
-            .get("MCC-Authentication")
-            .ok_or(MAuthValidationError::NoSig)?
-            .to_str()
-            .map_err(|_| MAuthValidationError::InvalidSignature)?;
-        let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWSV2")?;
-
-        //Compute response signing string
-        let mut hasher = Sha512::default();
-        hasher.update(body_raw);
-        let string_to_sign = format!(
-            "{}\n{}\n{}\n{}",
-            &status.as_u16(),
-            hex::encode(hasher.finalize()),
-            &host_app_uuid,
-            &ts_str,
-        );
-
-        match self.get_app_pub_key(&host_app_uuid).await {
-            None => Err(MAuthValidationError::KeyUnavailable),
-            Some(pub_key) => {
-                let ring_key = UnparsedPublicKey::new(
-                    &RSA_PKCS1_2048_8192_SHA512,
-                    bytes::Bytes::from(pub_key.public_key_to_der_pkcs1().unwrap()),
-                );
-                match ring_key.verify(&string_to_sign.into_bytes(), &raw_signature) {
-                    Ok(()) => Ok(body_raw.to_vec()),
-                    Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
-                }
-            }
-        }
-    }
-
-    async fn validate_response_v1(
-        &self,
-        status: &reqwest::StatusCode,
-        headers: &reqwest::header::HeaderMap,
-        body_raw: &[u8],
-    ) -> Result<Vec<u8>, MAuthValidationError> {
-        //retrieve and validate timestamp
-        let ts_str = headers
-            .get("X-MWS-Time")
-            .ok_or(MAuthValidationError::NoTime)?
-            .to_str()
-            .map_err(|_| MAuthValidationError::InvalidTime)?;
-        Self::validate_timestamp(ts_str)?;
-
-        //retrieve and parse auth string
-        let sig_header = headers
-            .get("X-MWS-Authentication")
-            .ok_or(MAuthValidationError::NoSig)?
-            .to_str()
-            .map_err(|_| MAuthValidationError::InvalidSignature)?;
-        let (host_app_uuid, raw_signature) = Self::split_auth_string(sig_header, "MWS")?;
-
-        //Build signature string and hash to final format
-        let mut hasher = Sha512::default();
-        let string1 = format!("{}\n", &status.as_u16());
-        hasher.update(&string1.into_bytes());
-        hasher.update(body_raw);
-        let string2 = format!("\n{}\n{}", &host_app_uuid, &ts_str);
-        hasher.update(&string2.into_bytes());
-        let sign_input: Vec<u8> = hex::encode(hasher.finalize()).into_bytes();
-
-        //Decrypt signature from server
-        let pub_key = self
-            .get_app_pub_key(&host_app_uuid)
-            .await
-            .ok_or(MAuthValidationError::KeyUnavailable)?;
-        let mut sign_output: Vec<u8> = vec![0; pub_key.size() as usize];
-        let len = pub_key
-            .public_decrypt(&raw_signature, &mut sign_output, Padding::PKCS1)
-            .unwrap();
-
-        if *sign_input.as_slice() == sign_output[0..len] {
-            Ok(body_raw.to_vec())
-        } else {
-            Err(MAuthValidationError::SignatureVerifyFailure)
-        }
-    }
-
-    async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Rsa<Public>> {
+    async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<String> {
         {
             let key_store = self.remote_key_store.read().unwrap();
             if let Some(pub_key) = key_store.get(app_uuid) {
@@ -589,11 +397,9 @@ impl MAuthInfo {
             }
         }
         let client = Client::new();
-        let (get_body, body_digest) = MAuthInfo::build_body_with_digest("".to_string());
         let uri = self.mauth_uri_base.join(&format!("{}", &app_uuid)).unwrap();
         let mut req = Request::new(Method::GET, uri);
-        *req.body_mut() = Some(get_body);
-        self.sign_request_v2(&mut req, &body_digest);
+        self.sign_request_v2(&mut req, &vec![]);
         let mauth_response = client.execute(req).await;
         match mauth_response {
             Err(_) => None,
@@ -602,11 +408,11 @@ impl MAuthInfo {
                 let pub_key_str = response_obj
                     .pointer("/security_token/public_key_str")
                     .and_then(|s| s.as_str())
-                    .unwrap();
-                let pub_key = Rsa::public_key_from_pem(pub_key_str.as_bytes()).unwrap();
+                    .unwrap()
+                    .to_string();
                 let mut key_store = self.remote_key_store.write().unwrap();
-                key_store.insert(*app_uuid, pub_key.clone());
-                Some(pub_key)
+                key_store.insert(*app_uuid, pub_key_str.clone());
+                Some(pub_key_str)
             }
         }
     }
@@ -629,21 +435,11 @@ pub enum ConfigReadError {
     InvalidUri(#[from] url::ParseError),
     #[error("App UUID not valid: {0}")]
     InvalidAppUuid(#[from] uuid::Error),
-    #[error("Key error: {0}")]
-    OpenSSLError(#[from] openssl::error::ErrorStack),
-    #[error("Key error")]
-    RingKeyError(ring::error::KeyRejected),
 }
 
 impl From<serde_yaml::Error> for ConfigReadError {
     fn from(err: serde_yaml::Error) -> ConfigReadError {
         ConfigReadError::InvalidFile(Some(err))
-    }
-}
-
-impl From<ring::error::KeyRejected> for ConfigReadError {
-    fn from(err: ring::error::KeyRejected) -> ConfigReadError {
-        ConfigReadError::RingKeyError(err)
     }
 }
 
