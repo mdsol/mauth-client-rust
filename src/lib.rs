@@ -48,7 +48,6 @@ use uuid::Uuid;
 
 use mauth_core::signer::Signer;
 
-#[cfg(feature = "axum-service")]
 use mauth_core::verifier::Verifier;
 
 const CONFIG_FILE: &str = ".mauth_config.yml";
@@ -60,7 +59,7 @@ const CONFIG_FILE: &str = ".mauth_config.yml";
 /// makes the struct non-Sync.
 pub struct MAuthInfo {
     app_id: Uuid,
-    remote_key_store: Arc<RwLock<HashMap<Uuid, String>>>,
+    remote_key_store: Arc<RwLock<HashMap<Uuid, Verifier>>>,
     mauth_uri_base: Url,
     sign_with_v1_also: bool,
     allow_v1_auth: bool,
@@ -119,7 +118,7 @@ impl MAuthInfo {
     /// if being used outside of the crate.
     pub fn from_config_section(
         section: &ConfigFileSection,
-        input_keystore: Option<Arc<RwLock<HashMap<Uuid, String>>>>,
+        input_keystore: Option<Arc<RwLock<HashMap<Uuid, Verifier>>>>,
     ) -> Result<MAuthInfo, ConfigReadError> {
         let full_uri: Url = format!(
             "{}/mauth/{}/security_tokens/",
@@ -136,18 +135,19 @@ impl MAuthInfo {
                 .unwrap_or_else(|| Arc::new(RwLock::new(HashMap::new()))),
             sign_with_v1_also: !section.v2_only_sign_requests.unwrap_or(false),
             allow_v1_auth: !section.v2_only_authenticate.unwrap_or(false),
-            signer: Signer::new(section.app_uuid.clone(), pk_data).unwrap(),
+            signer: Signer::new(section.app_uuid.clone(), pk_data)?,
         })
     }
 
     /// This method determines how to sign the request automatically while respecting the
     /// `v2_only_sign_requests` flag in the config file. It always signs with the V2 algorithm and
     /// signature, and will also sign with the V1 algorithm, if the configuration permits.
-    pub fn sign_request(&self, req: &mut Request, body: &Vec<u8>) {
-        self.sign_request_v2(req, body);
+    pub fn sign_request(&self, req: &mut Request, body: &[u8]) -> Result<(), SigningError> {
+        self.sign_request_v2(req, body)?;
         if self.sign_with_v1_also {
-            self.sign_request_v1(req, body);
+            self.sign_request_v1(req, body)?;
         }
+        Ok(())
     }
 
     #[cfg(feature = "axum-service")]
@@ -196,20 +196,22 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v2(&self, req: &mut Request, body_data: &Vec<u8>) {
+    pub fn sign_request_v2(
+        &self,
+        req: &mut Request,
+        body_data: &[u8],
+    ) -> Result<(), SigningError> {
         let timestamp_str = Utc::now().timestamp().to_string();
-        let some_string = self
-            .signer
-            .sign_string(
-                2,
-                req.method().as_str(),
-                req.url().path(),
-                req.url().query().unwrap_or(""),
-                &body_data,
-                timestamp_str.clone(),
-            )
-            .unwrap();
+        let some_string = self.signer.sign_string(
+            2,
+            req.method().as_str(),
+            req.url().path(),
+            req.url().query().unwrap_or(""),
+            body_data,
+            timestamp_str.clone(),
+        )?;
         self.set_headers_v2(req, some_string, &timestamp_str);
+        Ok(())
     }
 
     #[cfg(feature = "axum-service")]
@@ -241,24 +243,22 @@ impl MAuthInfo {
 
         match self.get_app_pub_key(&host_app_uuid).await {
             None => Err(MAuthValidationError::KeyUnavailable),
-            Some(pub_key) => {
-                let verifier = Verifier::new(
-                    host_app_uuid,
-                    pub_key.clone(),
-                )
-                .unwrap();
-                match verifier.verify_signature(
-                    2,
-                    req.method.as_str(),
-                    req.uri.path(),
-                    req.uri.query().unwrap_or(""),
-                    body_bytes,
-                    ts_str,
-                    String::from_utf8(raw_signature).unwrap(),
-                ) {
-                    Ok(true) => Ok(host_app_uuid),
-                    Ok(false) => Err(MAuthValidationError::SignatureVerifyFailure),
-                    Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
+            Some(verifier) => {
+                if let Ok(signature) = String::from_utf8(raw_signature) {
+                    match verifier.verify_signature(
+                        2,
+                        req.method.as_str(),
+                        req.uri.path(),
+                        req.uri.query().unwrap_or(""),
+                        body_bytes,
+                        ts_str,
+                        signature,
+                    ) {
+                        Ok(()) => Ok(host_app_uuid),
+                        Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
+                    }
+                } else {
+                    Err(MAuthValidationError::SignatureVerifyFailure)
                 }
             }
         }
@@ -290,24 +290,22 @@ impl MAuthInfo {
 
         match self.get_app_pub_key(&host_app_uuid).await {
             None => Err(MAuthValidationError::KeyUnavailable),
-            Some(pub_key) => {
-                let verifier = Verifier::new(
-                    host_app_uuid,
-                    pub_key.clone(),
-                )
-                .unwrap();
-                match verifier.verify_signature(
-                    1,
-                    req.method.as_str(),
-                    req.uri.path(),
-                    req.uri.query().unwrap_or(""),
-                    body_bytes,
-                    ts_str,
-                    String::from_utf8(raw_signature).unwrap(),
-                ) {
-                    Ok(true) => Ok(host_app_uuid),
-                    Ok(false) => Err(MAuthValidationError::SignatureVerifyFailure),
-                    Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
+            Some(verifier) => {
+                if let Ok(signature) = String::from_utf8(raw_signature) {
+                    match verifier.verify_signature(
+                        1,
+                        req.method.as_str(),
+                        req.uri.path(),
+                        req.uri.query().unwrap_or(""),
+                        body_bytes,
+                        ts_str,
+                        signature,
+                    ) {
+                        Ok(()) => Ok(host_app_uuid),
+                        Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
+                    }
+                } else {
+                    Err(MAuthValidationError::SignatureVerifyFailure)
                 }
             }
         }
@@ -329,24 +327,26 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v1(&self, req: &mut Request, body_data: &Vec<u8>) {
+    pub fn sign_request_v1(
+        &self,
+        req: &mut Request,
+        body_data: &[u8],
+    ) -> Result<(), SigningError> {
         let timestamp_str = Utc::now().timestamp().to_string();
 
-        let sig = self
-            .signer
-            .sign_string(
-                1,
-                req.method().as_str(),
-                req.url().path(),
-                req.url().query().unwrap_or(""),
-                &body_data,
-                timestamp_str.clone(),
-            )
-            .unwrap();
+        let sig = self.signer.sign_string(
+            1,
+            req.method().as_str(),
+            req.url().path(),
+            req.url().query().unwrap_or(""),
+            body_data,
+            timestamp_str.clone(),
+        )?;
 
         let headers = req.headers_mut();
         headers.insert("X-MWS-Time", HeaderValue::from_str(&timestamp_str).unwrap());
         headers.insert("X-MWS-Authentication", HeaderValue::from_str(&sig).unwrap());
+        Ok(())
     }
 
     fn validate_timestamp(timestamp_str: &str) -> Result<(), MAuthValidationError> {
@@ -389,7 +389,7 @@ impl MAuthInfo {
         Ok((host_app_uuid, raw_signature))
     }
 
-    async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<String> {
+    async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Verifier> {
         {
             let key_store = self.remote_key_store.read().unwrap();
             if let Some(pub_key) = key_store.get(app_uuid) {
@@ -399,20 +399,31 @@ impl MAuthInfo {
         let client = Client::new();
         let uri = self.mauth_uri_base.join(&format!("{}", &app_uuid)).unwrap();
         let mut req = Request::new(Method::GET, uri);
-        self.sign_request_v2(&mut req, &vec![]);
+        // This can only error with invalid UTF8 format, which is impossible here
+        self.sign_request_v2(&mut req, &[]).unwrap();
         let mauth_response = client.execute(req).await;
         match mauth_response {
             Err(_) => None,
             Ok(response) => {
-                let response_obj = response.json::<serde_json::Value>().await.unwrap();
-                let pub_key_str = response_obj
-                    .pointer("/security_token/public_key_str")
-                    .and_then(|s| s.as_str())
-                    .unwrap()
-                    .to_string();
-                let mut key_store = self.remote_key_store.write().unwrap();
-                key_store.insert(*app_uuid, pub_key_str.clone());
-                Some(pub_key_str)
+                if let Ok(response_obj) = response.json::<serde_json::Value>().await {
+                    if let Some(pub_key_str) = response_obj
+                        .pointer("/security_token/public_key_str")
+                        .and_then(|s| s.as_str())
+                        .map(|st| st.to_owned())
+                    {
+                        if let Ok(verifier) = Verifier::new(*app_uuid, pub_key_str) {
+                            let mut key_store = self.remote_key_store.write().unwrap();
+                            key_store.insert(*app_uuid, verifier.clone());
+                            Some(verifier)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
         }
     }
@@ -435,6 +446,19 @@ pub enum ConfigReadError {
     InvalidUri(#[from] url::ParseError),
     #[error("App UUID not valid: {0}")]
     InvalidAppUuid(#[from] uuid::Error),
+    #[error("Unable to parse RSA private key: {0}")]
+    PrivateKeyDecodeError(String),
+}
+
+impl From<mauth_core::error::Error> for ConfigReadError {
+    fn from(err: mauth_core::error::Error) -> ConfigReadError {
+        match err {
+            mauth_core::error::Error::PrivateKeyDecodeError(pkey_err) => {
+                ConfigReadError::PrivateKeyDecodeError(format!("{}", pkey_err))
+            }
+            _ => panic!("should not be possible to get this error type from signer construction"),
+        }
+    }
 }
 
 impl From<serde_yaml::Error> for ConfigReadError {
@@ -471,6 +495,24 @@ pub enum MAuthValidationError {
     /// The body of the response did not match the signature
     #[error("The body of the response did not match the signature")]
     SignatureVerifyFailure,
+}
+
+/// All of the errors that can take place while attempting to sign a request
+#[derive(Debug, Error)]
+pub enum SigningError {
+    #[error("Unable to handle the URL as the format was invalid: {0}")]
+    UrlEncodingError(std::string::FromUtf8Error),
+}
+
+impl From<mauth_core::error::Error> for SigningError {
+    fn from(err: mauth_core::error::Error) -> SigningError {
+        match err {
+            mauth_core::error::Error::UrlEncodingError(url_err) => {
+                SigningError::UrlEncodingError(url_err)
+            }
+            _ => panic!("should not be possible to get this error type from signing a request"),
+        }
+    }
 }
 
 #[cfg(feature = "axum-service")]

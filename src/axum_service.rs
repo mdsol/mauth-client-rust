@@ -2,6 +2,7 @@
 
 use axum::extract::Request;
 use futures_core::future::BoxFuture;
+use mauth_core::verifier::Verifier;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
@@ -68,7 +69,7 @@ impl<S: Clone> Clone for MAuthValidationService<S> {
 #[derive(Clone)]
 pub struct MAuthValidationLayer {
     config_info: ConfigFileSection,
-    remote_key_store: Arc<RwLock<HashMap<Uuid, String>>>,
+    remote_key_store: Arc<RwLock<HashMap<Uuid, Verifier>>>,
 }
 
 impl<S> Layer<S> for MAuthValidationLayer {

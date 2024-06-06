@@ -46,15 +46,16 @@ async fn bad_key_file_returns_right_error() {
     };
     let load_result = MAuthInfo::from_config_section(&bad_config, None);
     fs::remove_file(&filename).await.unwrap();
-    assert!(matches!(load_result, Err(ConfigReadError::FileReadError(_))));
+    assert!(matches!(
+        load_result,
+        Err(ConfigReadError::FileReadError(_))
+    ));
 }
 
 #[tokio::test]
 async fn bad_uuid_returns_right_error() {
     let filename = "valid_key_file";
-    fs::write(&filename, "invalid data")
-        .await
-        .unwrap();
+    fs::write(&filename, "invalid data").await.unwrap();
     let bad_config = ConfigFileSection {
         app_uuid: "".to_string(),
         mauth_baseurl: "https://example.com/".to_string(),
