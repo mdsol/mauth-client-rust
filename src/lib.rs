@@ -49,9 +49,13 @@ pub struct MAuthInfo {
 
 #[cfg(test)]
 mod protocol_test_suite;
+/// Tower Service and Layer to allow Tower-integrated servers to validate incoming request
 #[cfg(feature = "axum-service")]
 pub mod axum_service;
+/// Implementation of code to validate incoming requests
 #[cfg(feature = "axum-service")]
 pub mod validate_incoming;
+/// Implementation of code to sign outgoing requests
 pub mod sign_outgoing;
+/// Helpers to parse configuration files or supply structs and construct instances of the main struct
 pub mod config;
