@@ -22,10 +22,11 @@ async fn setup_mauth_info() -> (MAuthInfo, u64) {
         app_uuid: sign_config.app_uuid,
         mauth_baseurl: "https://www.example.com/".to_string(),
         mauth_api_version: "v1".to_string(),
-        private_key_file: format!(
+        private_key_file: Some(format!(
             "mauth-protocol-test-suite{}",
             sign_config.private_key_file.replace('.', "")
-        ),
+        )),
+        private_key_data: None,
         v2_only_sign_requests: None,
         v2_only_authenticate: None,
     };

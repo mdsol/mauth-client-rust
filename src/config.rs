@@ -46,7 +46,13 @@ impl MAuthInfo {
         )
         .parse()?;
 
-        let pk_data = std::fs::read_to_string(&section.private_key_file)?;
+        let mut pk_data = section.private_key_data.clone();
+        if pk_data.is_none() && section.private_key_file.is_some() {
+            pk_data = Some(std::fs::read_to_string(section.private_key_file.as_ref().unwrap())?);
+        }
+        if pk_data.is_none() {
+            return Err(ConfigReadError::NoPrivateKey);
+        }
 
         Ok(MAuthInfo {
             app_id: Uuid::parse_str(&section.app_uuid)?,
@@ -55,7 +61,7 @@ impl MAuthInfo {
                 .unwrap_or_else(|| Arc::new(RwLock::new(HashMap::new()))),
             sign_with_v1_also: !section.v2_only_sign_requests.unwrap_or(false),
             allow_v1_auth: !section.v2_only_authenticate.unwrap_or(false),
-            signer: Signer::new(section.app_uuid.clone(), pk_data)?,
+            signer: Signer::new(section.app_uuid.clone(), pk_data.unwrap())?,
         })
     }
 }
@@ -67,7 +73,8 @@ pub struct ConfigFileSection {
     pub app_uuid: String,
     pub mauth_baseurl: String,
     pub mauth_api_version: String,
-    pub private_key_file: String,
+    pub private_key_file: Option<String>,
+    pub private_key_data: Option<String>,
     pub v2_only_sign_requests: Option<bool>,
     pub v2_only_authenticate: Option<bool>,
 }
@@ -86,6 +93,8 @@ pub enum ConfigReadError {
     InvalidAppUuid(#[from] uuid::Error),
     #[error("Unable to parse RSA private key: {0}")]
     PrivateKeyDecodeError(String),
+    #[error("Neither private_key_file nor private_key_data were provided")]
+    NoPrivateKey,
 }
 
 impl From<mauth_core::error::Error> for ConfigReadError {
@@ -116,7 +125,8 @@ mod test {
             app_uuid: "".to_string(),
             mauth_baseurl: "dfaedfaewrfaew".to_string(),
             mauth_api_version: "".to_string(),
-            private_key_file: "".to_string(),
+            private_key_file: Some("".to_string()),
+            private_key_data: None,
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
         };
@@ -130,7 +140,8 @@ mod test {
             app_uuid: "".to_string(),
             mauth_baseurl: "https://example.com/".to_string(),
             mauth_api_version: "v1".to_string(),
-            private_key_file: "no_such_file".to_string(),
+            private_key_file: Some("no_such_file".to_string()),
+            private_key_data: None,
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
         };
@@ -149,7 +160,8 @@ mod test {
             app_uuid: "c7db7fde-2448-11ef-b358-125eb8485a60".to_string(),
             mauth_baseurl: "https://example.com/".to_string(),
             mauth_api_version: "v1".to_string(),
-            private_key_file: filename.to_string(),
+            private_key_file: Some(filename.to_string()),
+            private_key_data: None,
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
         };
@@ -169,7 +181,8 @@ mod test {
             app_uuid: "".to_string(),
             mauth_baseurl: "https://example.com/".to_string(),
             mauth_api_version: "v1".to_string(),
-            private_key_file: filename.to_string(),
+            private_key_file: Some(filename.to_string()),
+            private_key_data: None,
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
         };
