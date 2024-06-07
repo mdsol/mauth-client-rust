@@ -12,8 +12,7 @@ approval for the full stack used through the Architecture and Security groups.
 ```rust
 let mauth_info = MAuthInfo::from_default_file().unwrap();
 let client = Client::new();
-let uri: Url = "https://www.example.com/".parse().unwrap();
-let mut req = Request::new(Method::GET, uri);
+let mut req = client.get("https://www.example.com/").build().unwrap();
 mauth_info.sign_request(&mut req);
 match client.execute(req).await {
     Err(err) => println!("Got error {}", err),
