@@ -21,6 +21,16 @@ match client.execute(req).await {
 }
 ```
 
+
+The above code will read your mauth configuration from a file in `~/.mauth_config.yml` which format is:
+```yaml
+common: &common
+  mauth_baseurl: https://<URL of MAUTH SERVER>
+  mauth_api_version: v1
+  app_uuid: <YOUR APP UUID HERE>
+  private_key_file: <PATH TO MAUTH KEY>
+```
+
 The optional `axum-service` feature provides for a Tower Layer and Service that will
 authenticate incoming requests via MAuth V2 or V1 and provide to the lower layers a
 validated app_uuid from the request via the ValidatedRequestDetails struct.
