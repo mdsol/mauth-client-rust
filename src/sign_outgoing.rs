@@ -10,7 +10,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    /// 
+    ///
     /// Note that it will need to read the entire body in order to sign it, so it will not
     /// work properly if any of the streaming body types are used.
     pub fn sign_request(&self, req: &mut Request) -> Result<(), SigningError> {
@@ -29,7 +29,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    /// 
+    ///
     /// Also note that it will need to read the entire body in order to sign it, so it will not
     /// work properly if any of the streaming body types are used.
     pub fn sign_request_v2(&self, req: &mut Request) -> Result<(), SigningError> {
@@ -66,7 +66,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    /// 
+    ///
     /// Also note that it will need to read the entire body in order to sign it, so it will not
     /// work properly if any of the streaming body types are used.
     pub fn sign_request_v1(&self, req: &mut Request) -> Result<(), SigningError> {
