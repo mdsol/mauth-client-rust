@@ -1,7 +1,7 @@
-use thiserror::Error;
+use crate::MAuthInfo;
 use chrono::prelude::*;
 use reqwest::{header::HeaderValue, Request};
-use crate::MAuthInfo;
+use thiserror::Error;
 
 impl MAuthInfo {
     /// This method determines how to sign the request automatically while respecting the
@@ -23,11 +23,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v2(
-        &self,
-        req: &mut Request,
-        body_data: &[u8],
-    ) -> Result<(), SigningError> {
+    pub fn sign_request_v2(&self, req: &mut Request, body_data: &[u8]) -> Result<(), SigningError> {
         let timestamp_str = Utc::now().timestamp().to_string();
         let some_string = self.signer.sign_string(
             2,
@@ -57,11 +53,7 @@ impl MAuthInfo {
     ///
     /// Note that, as the request signature includes a timestamp, the request must be sent out
     /// shortly after the signature takes place.
-    pub fn sign_request_v1(
-        &self,
-        req: &mut Request,
-        body_data: &[u8],
-    ) -> Result<(), SigningError> {
+    pub fn sign_request_v1(&self, req: &mut Request, body_data: &[u8]) -> Result<(), SigningError> {
         let timestamp_str = Utc::now().timestamp().to_string();
 
         let sig = self.signer.sign_string(

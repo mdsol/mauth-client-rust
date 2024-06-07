@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! # mauth-client
 //!
 //! This crate allows users of the Reqwest crate for making HTTP requests to sign those requests with
@@ -27,11 +28,16 @@
 //! authenticate incoming requests via MAuth V2 or V1 and provide to the lower layers a
 //! validated app_uuid from the request via the ValidatedRequestDetails struct.
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use mauth_core::signer::Signer;
+#[cfg(feature = "axum-service")]
+use mauth_core::verifier::Verifier;
+#[cfg(feature = "axum-service")]
 use reqwest::Url;
+#[cfg(feature = "axum-service")]
+use std::collections::HashMap;
+#[cfg(feature = "axum-service")]
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
-use mauth_core::{signer::Signer, verifier::Verifier};
 
 /// This is the primary struct of this class. It contains all of the information
 /// required to sign requests using the MAuth protocol and verify the responses.
@@ -47,15 +53,15 @@ pub struct MAuthInfo {
     signer: Signer,
 }
 
-#[cfg(test)]
-mod protocol_test_suite;
 /// Tower Service and Layer to allow Tower-integrated servers to validate incoming request
 #[cfg(feature = "axum-service")]
 pub mod axum_service;
+/// Helpers to parse configuration files or supply structs and construct instances of the main struct
+pub mod config;
+#[cfg(test)]
+mod protocol_test_suite;
+/// Implementation of code to sign outgoing requests
+pub mod sign_outgoing;
 /// Implementation of code to validate incoming requests
 #[cfg(feature = "axum-service")]
 pub mod validate_incoming;
-/// Implementation of code to sign outgoing requests
-pub mod sign_outgoing;
-/// Helpers to parse configuration files or supply structs and construct instances of the main struct
-pub mod config;

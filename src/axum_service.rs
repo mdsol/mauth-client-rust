@@ -10,7 +10,10 @@ use std::task::{Context, Poll};
 use tower::{Layer, Service};
 use uuid::Uuid;
 
-use crate::{config::{ConfigFileSection, ConfigReadError}, MAuthInfo};
+use crate::{
+    config::{ConfigFileSection, ConfigReadError},
+    MAuthInfo,
+};
 
 /// This is a Tower Service which validates that incoming requests have a valid
 /// MAuth signature. It only passes the request down to the next layer if the

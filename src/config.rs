@@ -1,12 +1,12 @@
-use serde::Deserialize;
-use thiserror::Error;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use std::io;
-use uuid::Uuid;
+use crate::MAuthInfo;
 use mauth_core::{signer::Signer, verifier::Verifier};
 use reqwest::Url;
-use crate::MAuthInfo;
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::io;
+use std::sync::{Arc, RwLock};
+use thiserror::Error;
+use uuid::Uuid;
 
 const CONFIG_FILE: &str = ".mauth_config.yml";
 

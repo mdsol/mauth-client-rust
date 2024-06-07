@@ -1,11 +1,10 @@
-use uuid::Uuid;
-use thiserror::Error;
+use crate::MAuthInfo;
 use base64::Engine;
 use chrono::prelude::*;
-use reqwest::{Client, Method, Request};
 use mauth_core::verifier::Verifier;
-use crate::MAuthInfo;
-
+use reqwest::{Client, Method, Request};
+use thiserror::Error;
+use uuid::Uuid;
 
 /// This struct holds the app UUID for a validated request. It is meant to be used with the
 /// Extension setup in Hyper requests, where it is placed in requests that passed authentication.
