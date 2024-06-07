@@ -48,7 +48,9 @@ impl MAuthInfo {
 
         let mut pk_data = section.private_key_data.clone();
         if pk_data.is_none() && section.private_key_file.is_some() {
-            pk_data = Some(std::fs::read_to_string(section.private_key_file.as_ref().unwrap())?);
+            pk_data = Some(std::fs::read_to_string(
+                section.private_key_file.as_ref().unwrap(),
+            )?);
         }
         if pk_data.is_none() {
             return Err(ConfigReadError::NoPrivateKey);
@@ -77,6 +79,20 @@ pub struct ConfigFileSection {
     pub private_key_data: Option<String>,
     pub v2_only_sign_requests: Option<bool>,
     pub v2_only_authenticate: Option<bool>,
+}
+
+impl Default for ConfigFileSection {
+    fn default() -> Self {
+        Self {
+            app_uuid: "".to_string(),
+            mauth_baseurl: "".to_string(),
+            mauth_api_version: "v1".to_string(),
+            private_key_file: None,
+            private_key_data: None,
+            v2_only_sign_requests: Some(true),
+            v2_only_authenticate: Some(true),
+        }
+    }
 }
 
 /// All of the possible errors that can take place when attempting to read a config file. Errors
