@@ -23,8 +23,7 @@ impl MAuthInfo {
         home.push(CONFIG_FILE);
         let config_data = std::fs::read_to_string(&home)?;
 
-        let config_data_value: serde_yml::Value =
-            serde_yml::from_slice(&config_data.into_bytes())?;
+        let config_data_value: serde_yml::Value = serde_yml::from_slice(&config_data.into_bytes())?;
         let common_section = config_data_value
             .get("common")
             .ok_or(ConfigReadError::InvalidFile(None))?;
