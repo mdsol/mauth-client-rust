@@ -29,11 +29,7 @@ tower = { version = ">= 0.4.13", optional = true }
 axum = { version = ">= 0.7.2", optional = true }
 futures-core = { version = ">= 0.3.25", optional = true }
 thiserror = ">= 1.0.37"
-
-[dependencies.mauth-core]
-git = "https://github.com/mdsol/mauth-core"
-branch = "main"
-version = "0.5"
+mauth-core = "0.5"
 
 [dev-dependencies]
 tokio = { version = ">= 1.0.1", features = ["rt-multi-thread", "macros"] }
