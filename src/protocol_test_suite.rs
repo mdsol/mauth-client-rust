@@ -12,7 +12,7 @@ struct TestSignConfig {
     private_key_file: String,
 }
 
-const BASE_PATH: &'static str = "mauth-protocol-test-suite/protocols/MWSV2/";
+const BASE_PATH: &str = "mauth-protocol-test-suite/protocols/MWSV2/";
 
 async fn setup_mauth_info() -> (MAuthInfo, u64) {
     let config_path = Path::new("mauth-protocol-test-suite/signing-config.json");
