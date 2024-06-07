@@ -198,7 +198,7 @@ impl MAuthInfo {
         let uri = self.mauth_uri_base.join(&format!("{}", &app_uuid)).unwrap();
         let mut req = Request::new(Method::GET, uri);
         // This can only error with invalid UTF8 format, which is impossible here
-        self.sign_request_v2(&mut req, &[]).unwrap();
+        self.sign_request_v2(&mut req).unwrap();
         let mauth_response = client.execute(req).await;
         match mauth_response {
             Err(_) => None,

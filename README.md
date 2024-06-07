@@ -14,7 +14,7 @@ let mauth_info = MAuthInfo::from_default_file().unwrap();
 let client = Client::new();
 let uri: Url = "https://www.example.com/".parse().unwrap();
 let mut req = Request::new(Method::GET, uri);
-mauth_info.sign_request(&mut req, &[]);
+mauth_info.sign_request(&mut req);
 match client.execute(req).await {
     Err(err) => println!("Got error {}", err),
     Ok(response) => println!("Got validated response with body {}", response.text().await.unwrap()),
