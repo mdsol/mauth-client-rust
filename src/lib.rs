@@ -29,13 +29,9 @@
 //! validated app_uuid from the request via the ValidatedRequestDetails struct.
 
 use mauth_core::signer::Signer;
-#[cfg(feature = "axum-service")]
 use mauth_core::verifier::Verifier;
-#[cfg(feature = "axum-service")]
 use reqwest::Url;
-#[cfg(feature = "axum-service")]
 use std::collections::HashMap;
-#[cfg(feature = "axum-service")]
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
@@ -44,13 +40,14 @@ use uuid::Uuid;
 ///
 /// Note that it contains a cache of response keys for verifying response signatures. This cache
 /// makes the struct non-Sync.
+#[allow(dead_code)]
 pub struct MAuthInfo {
     app_id: Uuid,
+    sign_with_v1_also: bool,
+    signer: Signer,
     remote_key_store: Arc<RwLock<HashMap<Uuid, Verifier>>>,
     mauth_uri_base: Url,
-    sign_with_v1_also: bool,
     allow_v1_auth: bool,
-    signer: Signer,
 }
 
 /// Tower Service and Layer to allow Tower-integrated servers to validate incoming request
