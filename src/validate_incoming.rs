@@ -1,5 +1,4 @@
 use crate::MAuthInfo;
-use base64::Engine;
 use chrono::prelude::*;
 use mauth_core::verifier::Verifier;
 use reqwest::{Client, Method, Request};
@@ -180,11 +179,7 @@ impl MAuthInfo {
         let signature_encoded_string = header_split
             .next()
             .ok_or(MAuthValidationError::InvalidSignature)?;
-        let b64 = base64::engine::general_purpose::STANDARD;
-        let raw_signature: Vec<u8> = b64
-            .decode(signature_encoded_string)
-            .map_err(|_| MAuthValidationError::InvalidSignature)?;
-        Ok((host_app_uuid, raw_signature))
+        Ok((host_app_uuid, signature_encoded_string.into()))
     }
 
     async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Verifier> {
