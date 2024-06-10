@@ -10,6 +10,8 @@ release any code to Production or deploy in a Client-accessible environment with
 approval for the full stack used through the Architecture and Security groups.
 
 ```rust
+use mauth_client::MAuthInfo;
+use reqwest::Client;
 let mauth_info = MAuthInfo::from_default_file().unwrap();
 let client = Client::new();
 let mut req = client.get("https://www.example.com/").build().unwrap();

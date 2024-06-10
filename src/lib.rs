@@ -9,8 +9,8 @@
 //! approval for the full stack used through the Architecture and Security groups.
 //!
 //! ```no_run
-//! # use mauth_client::MAuthInfo;
-//! # use reqwest::{Client, Request, Body, Url, Method, header::HeaderValue, Response};
+//! use mauth_client::MAuthInfo;
+//! use reqwest::Client;
 //! # async fn make_signed_request() {
 //! let mauth_info = MAuthInfo::from_default_file().unwrap();
 //! let client = Client::new();
