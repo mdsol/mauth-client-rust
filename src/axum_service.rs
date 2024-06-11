@@ -2,7 +2,7 @@
 
 use axum::extract::Request;
 use futures_core::future::BoxFuture;
-use openssl::{pkey::Public, rsa::Rsa};
+use mauth_core::verifier::Verifier;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
@@ -10,7 +10,10 @@ use std::task::{Context, Poll};
 use tower::{Layer, Service};
 use uuid::Uuid;
 
-use crate::{ConfigFileSection, ConfigReadError, MAuthInfo};
+use crate::{
+    config::{ConfigFileSection, ConfigReadError},
+    MAuthInfo,
+};
 
 /// This is a Tower Service which validates that incoming requests have a valid
 /// MAuth signature. It only passes the request down to the next layer if the
@@ -69,7 +72,7 @@ impl<S: Clone> Clone for MAuthValidationService<S> {
 #[derive(Clone)]
 pub struct MAuthValidationLayer {
     config_info: ConfigFileSection,
-    remote_key_store: Arc<RwLock<HashMap<Uuid, Rsa<Public>>>>,
+    remote_key_store: Arc<RwLock<HashMap<Uuid, Verifier>>>,
 }
 
 impl<S> Layer<S> for MAuthValidationLayer {

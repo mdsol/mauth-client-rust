@@ -1,6 +1,6 @@
 [package]
 name = "mauth-client"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Mason Gup <mgup@mdsol.com>"]
 edition = "2021"
 documentation = "https://docs.rs/mauth-client/"
@@ -13,31 +13,25 @@ keywords = ["security", "authentication", "web"]
 categories = ["authentication", "web-programming"]
 
 [dependencies]
-ring = ">= 0.17.7"
-reqwest = { version = ">= 0.11.23", features = ["json"] }
-url = ">= 2.5.0"
-serde = { version = ">= 1.0.85", features = ["derive"] }
-serde_json = ">= 1.0.0"
-serde_yaml = ">= 0.8.0"
-uuid = { version = ">= 0.21.0", features = ["v4"] }
-dirs = ">= 2.0.0"
-base64 = ">= 0.10.0"
-chrono = ">= 0.4.0"
-percent-encoding = ">= 2.0.0"
-tokio = { version = ">= 1.0.1", features = ["fs"] }
-sha2 = ">= 0.9.0"
-hex = ">= 0.4.0"
-openssl = ">= 0.10.0"
-regex = { version = "1", default_features = false, features = ["std"] }
-bytes = ">= 1.0.0"
-http = ">= 1.0.0"
-tower = { version = ">= 0.4.13", optional = true }
+reqwest = { version = "0.12", features = ["json"] }
+url = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.10"
+uuid = { version = "1", features = ["v4"] }
+dirs = "5"
+chrono = "0.4"
+tokio = { version = "1", features = ["fs"] }
+tower = { version = "0.4", optional = true }
 axum = { version = ">= 0.7.2", optional = true }
-futures-core = { version = ">= 0.3.25", optional = true }
-thiserror = ">= 1.0.37"
+futures-core = { version = "0.3", optional = true }
+http = { version = "1", optional = true }
+bytes = { version = "1", optional = true }
+thiserror = "1"
+mauth-core = "0.5"
 
 [dev-dependencies]
-tokio = { version = ">= 1.0.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [features]
-axum-service = ["tower", "futures-core", "axum"]
+axum-service = ["tower", "futures-core", "axum", "http", "bytes"]
