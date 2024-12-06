@@ -37,11 +37,12 @@
 //! authenticate incoming requests via MAuth V2 or V1 and provide to the lower layers a
 //! validated app_uuid from the request via the ValidatedRequestDetails struct.
 
+use ::reqwest_middleware::ClientWithMiddleware;
 use mauth_core::signer::Signer;
 use mauth_core::verifier::Verifier;
 use reqwest::Url;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use uuid::Uuid;
 
 /// This is the primary struct of this class. It contains all of the information
@@ -49,15 +50,18 @@ use uuid::Uuid;
 ///
 /// Note that it contains a cache of response keys for verifying response signatures. This cache
 /// makes the struct non-Sync.
-#[allow(dead_code)]
+#[derive(Clone)]
 pub struct MAuthInfo {
     app_id: Uuid,
     sign_with_v1_also: bool,
     signer: Signer,
-    remote_key_store: Arc<RwLock<HashMap<Uuid, Verifier>>>,
     mauth_uri_base: Url,
     allow_v1_auth: bool,
 }
+
+static CLIENT: OnceLock<ClientWithMiddleware> = OnceLock::new();
+
+static PUBKEY_CACHE: OnceLock<Arc<RwLock<HashMap<Uuid, Verifier>>>> = OnceLock::new();
 
 /// Tower Service and Layer to allow Tower-integrated servers to validate incoming request
 #[cfg(feature = "axum-service")]
@@ -66,6 +70,7 @@ pub mod axum_service;
 pub mod config;
 #[cfg(test)]
 mod protocol_test_suite;
+mod reqwest_middleware;
 /// Implementation of code to sign outgoing requests
 pub mod sign_outgoing;
 /// Implementation of code to validate incoming requests

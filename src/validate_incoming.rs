@@ -1,7 +1,7 @@
-use crate::MAuthInfo;
+use crate::{MAuthInfo, CLIENT, PUBKEY_CACHE};
 use chrono::prelude::*;
 use mauth_core::verifier::Verifier;
-use reqwest::{Client, Method, Request};
+use reqwest::{Method, Request};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -184,17 +184,17 @@ impl MAuthInfo {
 
     async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Verifier> {
         {
-            let key_store = self.remote_key_store.read().unwrap();
+            let key_store = PUBKEY_CACHE.get().unwrap().read().unwrap();
             if let Some(pub_key) = key_store.get(app_uuid) {
                 return Some(pub_key.clone());
             }
         }
-        let client = Client::new();
         let uri = self.mauth_uri_base.join(&format!("{}", &app_uuid)).unwrap();
-        let mut req = Request::new(Method::GET, uri);
-        // This can only error with invalid UTF8 format, which is impossible here
-        self.sign_request_v2(&mut req).unwrap();
-        let mauth_response = client.execute(req).await;
+        let mauth_response = CLIENT
+            .get()
+            .unwrap()
+            .execute(Request::new(Method::GET, uri))
+            .await;
         match mauth_response {
             Err(_) => None,
             Ok(response) => {
@@ -205,7 +205,7 @@ impl MAuthInfo {
                         .map(|st| st.to_owned())
                     {
                         if let Ok(verifier) = Verifier::new(*app_uuid, pub_key_str) {
-                            let mut key_store = self.remote_key_store.write().unwrap();
+                            let mut key_store = PUBKEY_CACHE.get().unwrap().write().unwrap();
                             key_store.insert(*app_uuid, verifier.clone());
                             Some(verifier)
                         } else {
