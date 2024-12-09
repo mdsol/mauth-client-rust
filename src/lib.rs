@@ -42,7 +42,7 @@ use mauth_core::signer::Signer;
 use mauth_core::verifier::Verifier;
 use reqwest::Url;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{LazyLock, OnceLock, RwLock};
 use uuid::Uuid;
 
 /// This is the primary struct of this class. It contains all of the information
@@ -61,7 +61,8 @@ pub struct MAuthInfo {
 
 static CLIENT: OnceLock<ClientWithMiddleware> = OnceLock::new();
 
-static PUBKEY_CACHE: OnceLock<Arc<RwLock<HashMap<Uuid, Verifier>>>> = OnceLock::new();
+static PUBKEY_CACHE: LazyLock<RwLock<HashMap<Uuid, Verifier>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Tower Service and Layer to allow Tower-integrated servers to validate incoming request
 #[cfg(feature = "axum-service")]

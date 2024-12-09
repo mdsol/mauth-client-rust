@@ -1,12 +1,10 @@
-use crate::{MAuthInfo, CLIENT, PUBKEY_CACHE};
+use crate::{MAuthInfo, CLIENT};
 use mauth_core::signer::Signer;
 use reqwest::Client;
 use reqwest::Url;
 use reqwest_middleware::ClientBuilder;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, RwLock};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -68,8 +66,6 @@ impl MAuthInfo {
             let builder = builder.with(reqwest_tracing::TracingMiddleware::default());
             builder.build()
         });
-
-        PUBKEY_CACHE.get_or_init(|| Arc::new(RwLock::new(HashMap::new())));
 
         Ok(mauth_info)
     }

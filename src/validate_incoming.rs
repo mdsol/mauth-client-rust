@@ -184,7 +184,7 @@ impl MAuthInfo {
 
     async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Verifier> {
         {
-            let key_store = PUBKEY_CACHE.get().unwrap().read().unwrap();
+            let key_store = PUBKEY_CACHE.read().unwrap();
             if let Some(pub_key) = key_store.get(app_uuid) {
                 return Some(pub_key.clone());
             }
@@ -205,7 +205,7 @@ impl MAuthInfo {
                         .map(|st| st.to_owned())
                     {
                         if let Ok(verifier) = Verifier::new(*app_uuid, pub_key_str) {
-                            let mut key_store = PUBKEY_CACHE.get().unwrap().write().unwrap();
+                            let mut key_store = PUBKEY_CACHE.write().unwrap();
                             key_store.insert(*app_uuid, verifier.clone());
                             Some(verifier)
                         } else {
