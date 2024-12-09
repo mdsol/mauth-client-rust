@@ -1,7 +1,6 @@
 use crate::{MAuthInfo, CLIENT, PUBKEY_CACHE};
 use chrono::prelude::*;
 use mauth_core::verifier::Verifier;
-use reqwest::{Method, Request};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -190,11 +189,7 @@ impl MAuthInfo {
             }
         }
         let uri = self.mauth_uri_base.join(&format!("{}", &app_uuid)).unwrap();
-        let mauth_response = CLIENT
-            .get()
-            .unwrap()
-            .execute(Request::new(Method::GET, uri))
-            .await;
+        let mauth_response = CLIENT.get().unwrap().get(uri).send().await;
         match mauth_response {
             Err(_) => None,
             Ok(response) => {
