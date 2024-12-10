@@ -25,7 +25,7 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "5"
 chrono = "0.4"
 tokio = { version = "1", features = ["fs"] }
-tower = { version = "0.4", optional = true }
+tower = { version = "0.5", optional = true }
 axum = { version = ">= 0.7.2", optional = true }
 futures-core = { version = "0.3", optional = true }
 http = "1"
