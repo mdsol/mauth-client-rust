@@ -1,10 +1,10 @@
-use crate::MAuthInfo;
-use mauth_core::{signer::Signer, verifier::Verifier};
+use crate::{MAuthInfo, CLIENT};
+use mauth_core::signer::Signer;
+use reqwest::Client;
 use reqwest::Url;
+use reqwest_middleware::ClientBuilder;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, RwLock};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -15,7 +15,7 @@ impl MAuthInfo {
     /// present in the current user's home directory. Returns an enum error type that includes the
     /// error types of all crates used.
     pub fn from_default_file() -> Result<MAuthInfo, ConfigReadError> {
-        Self::from_config_section(&Self::config_section_from_default_file()?, None)
+        Self::from_config_section(&Self::config_section_from_default_file()?)
     }
 
     pub(crate) fn config_section_from_default_file() -> Result<ConfigFileSection, ConfigReadError> {
@@ -35,10 +35,7 @@ impl MAuthInfo {
     /// Construct the MAuthInfo struct based on a passed-in ConfigFileSection instance. The
     /// optional input_keystore is present to support internal cloning and need not be provided
     /// if being used outside of the crate.
-    pub fn from_config_section(
-        section: &ConfigFileSection,
-        input_keystore: Option<Arc<RwLock<HashMap<Uuid, Verifier>>>>,
-    ) -> Result<MAuthInfo, ConfigReadError> {
+    pub fn from_config_section(section: &ConfigFileSection) -> Result<MAuthInfo, ConfigReadError> {
         let full_uri: Url = format!(
             "{}/mauth/{}/security_tokens/",
             &section.mauth_baseurl, &section.mauth_api_version
@@ -55,15 +52,22 @@ impl MAuthInfo {
             return Err(ConfigReadError::NoPrivateKey);
         }
 
-        Ok(MAuthInfo {
+        let mauth_info = MAuthInfo {
             app_id: Uuid::parse_str(&section.app_uuid)?,
             mauth_uri_base: full_uri,
-            remote_key_store: input_keystore
-                .unwrap_or_else(|| Arc::new(RwLock::new(HashMap::new()))),
             sign_with_v1_also: !section.v2_only_sign_requests.unwrap_or(false),
             allow_v1_auth: !section.v2_only_authenticate.unwrap_or(false),
             signer: Signer::new(section.app_uuid.clone(), pk_data.unwrap())?,
-        })
+        };
+
+        CLIENT.get_or_init(|| {
+            let builder = ClientBuilder::new(Client::new()).with(mauth_info.clone());
+            #[cfg(any(feature = "tracing-otel-26", feature = "tracing-otel-27"))]
+            let builder = builder.with(reqwest_tracing::TracingMiddleware::default());
+            builder.build()
+        });
+
+        Ok(mauth_info)
     }
 }
 
@@ -145,7 +149,7 @@ mod test {
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
         };
-        let load_result = MAuthInfo::from_config_section(&bad_config, None);
+        let load_result = MAuthInfo::from_config_section(&bad_config);
         assert!(matches!(load_result, Err(ConfigReadError::InvalidUri(_))));
     }
 
@@ -160,7 +164,7 @@ mod test {
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
         };
-        let load_result = MAuthInfo::from_config_section(&bad_config, None);
+        let load_result = MAuthInfo::from_config_section(&bad_config);
         assert!(matches!(
             load_result,
             Err(ConfigReadError::FileReadError(_))
@@ -180,7 +184,7 @@ mod test {
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
         };
-        let load_result = MAuthInfo::from_config_section(&bad_config, None);
+        let load_result = MAuthInfo::from_config_section(&bad_config);
         fs::remove_file(&filename).await.unwrap();
         assert!(matches!(
             load_result,
@@ -201,7 +205,7 @@ mod test {
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
         };
-        let load_result = MAuthInfo::from_config_section(&bad_config, None);
+        let load_result = MAuthInfo::from_config_section(&bad_config);
         fs::remove_file(&filename).await.unwrap();
         assert!(matches!(
             load_result,
