@@ -51,7 +51,13 @@ match client.get("https://www.example.com/").send().await {
 
 The optional `axum-service` feature provides for a Tower Layer and Service that will
 authenticate incoming requests via MAuth V2 or V1 and provide to the lower layers a
-validated app_uuid from the request via the ValidatedRequestDetails struct.
+validated app_uuid from the request via the ValidatedRequestDetails struct. Note that
+this feature now includes a `RequiredMAuthValidationLayer`, which will reject any
+requests without a valid signature before they reach lower layers, and also a
+`OptionalMAuthValidationLayer`, which lets all requests through, but only attaches a
+ValidatedRequestDetails extension struct if there is a valid signature. When using this
+layer, it is the responsiblity of the request handler to check for the extension and
+reject requests that are not properly authorized.
 
 There are also optional features `tracing-otel-26` and `tracing-otel-27` that pair with
 the `axum-service` feature to ensure that any outgoing requests for credentials that take
