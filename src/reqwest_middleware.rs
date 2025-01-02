@@ -6,7 +6,6 @@ use crate::{sign_outgoing::SigningError, MAuthInfo};
 
 #[async_trait::async_trait]
 impl Middleware for MAuthInfo {
-    #[must_use]
     async fn handle(
         &self,
         mut req: Request,

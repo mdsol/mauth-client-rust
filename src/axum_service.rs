@@ -1,11 +1,13 @@
 //! Structs and impls related to providing a Tower Service and Layer to verify incoming requests
 
-use axum::extract::Request;
+use axum::extract::{FromRequestParts, Request};
 use futures_core::future::BoxFuture;
+use http::{request::Parts, StatusCode};
 use std::error::Error;
 use std::task::{Context, Poll};
 use tower::{Layer, Service};
 
+use crate::validate_incoming::ValidatedRequestDetails;
 use crate::{
     config::{ConfigFileSection, ConfigReadError},
     MAuthInfo,
@@ -187,5 +189,18 @@ impl OptionalMAuthValidationLayer {
     pub fn from_config_section(config_info: ConfigFileSection) -> Result<Self, ConfigReadError> {
         MAuthInfo::from_config_section(&config_info)?;
         Ok(OptionalMAuthValidationLayer { config_info })
+    }
+}
+
+#[async_trait::async_trait]
+impl<S> FromRequestParts<S> for ValidatedRequestDetails {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<ValidatedRequestDetails>()
+            .cloned()
+            .ok_or(StatusCode::UNAUTHORIZED)
     }
 }
