@@ -1,11 +1,17 @@
 //! Structs and impls related to providing a Tower Service and Layer to verify incoming requests
 
-use axum::extract::{FromRequestParts, Request};
+use axum::{
+    body::Body,
+    extract::{FromRequestParts, OptionalFromRequestParts, Request},
+    response::IntoResponse,
+};
 use futures_core::future::BoxFuture;
-use http::{request::Parts, StatusCode};
+use http::{request::Parts, Response, StatusCode};
+use std::convert::Infallible;
 use std::error::Error;
 use std::task::{Context, Poll};
 use tower::{Layer, Service};
+use tracing::error;
 
 use crate::validate_incoming::ValidatedRequestDetails;
 use crate::{
@@ -27,13 +33,14 @@ where
     S: Service<Request> + Send + Clone + 'static,
     S::Future: Send + 'static,
     S::Error: Into<Box<dyn Error + Sync + Send>>,
+    S::Response: Into<Response<Body>>,
 {
-    type Response = S::Response;
-    type Error = Box<dyn Error + Sync + Send>;
+    type Response = Response<Body>;
+    type Error = S::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx).map_err(|e| e.into())
+        self.service.poll_ready(cx)
     }
 
     fn call(&mut self, request: Request) -> Self::Future {
@@ -41,10 +48,16 @@ where
         Box::pin(async move {
             match cloned.mauth_info.validate_request(request).await {
                 Ok(valid_request) => match cloned.service.call(valid_request).await {
-                    Ok(response) => Ok(response),
-                    Err(err) => Err(err.into()),
+                    Ok(response) => Ok(response.into()),
+                    Err(err) => Err(err),
                 },
-                Err(err) => Err(Box::new(err) as Box<dyn Error + Send + Sync>),
+                Err(err) => {
+                    error!(
+                        error = ?err,
+                        "Failed to validate MAuth signature, rejecting request"
+                    );
+                    Ok(StatusCode::UNAUTHORIZED.into_response())
+                }
             }
         })
     }
@@ -121,23 +134,18 @@ where
     S::Error: Into<Box<dyn Error + Sync + Send>>,
 {
     type Response = S::Response;
-    type Error = Box<dyn Error + Sync + Send>;
+    type Error = S::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx).map_err(|e| e.into())
+        self.service.poll_ready(cx)
     }
 
     fn call(&mut self, request: Request) -> Self::Future {
         let mut cloned = self.clone();
         Box::pin(async move {
-            match cloned.mauth_info.validate_request_optionally(request).await {
-                Ok(valid_request) => match cloned.service.call(valid_request).await {
-                    Ok(response) => Ok(response),
-                    Err(err) => Err(err.into()),
-                },
-                Err(err) => Err(Box::new(err) as Box<dyn Error + Send + Sync>),
-            }
+            let processed_request = cloned.mauth_info.validate_request_optionally(request).await;
+            cloned.service.call(processed_request).await
         })
     }
 }
@@ -192,8 +200,10 @@ impl OptionalMAuthValidationLayer {
     }
 }
 
-#[async_trait::async_trait]
-impl<S> FromRequestParts<S> for ValidatedRequestDetails {
+impl<S> FromRequestParts<S> for ValidatedRequestDetails
+where
+    S: Send + Sync,
+{
     type Rejection = StatusCode;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
@@ -202,5 +212,19 @@ impl<S> FromRequestParts<S> for ValidatedRequestDetails {
             .get::<ValidatedRequestDetails>()
             .cloned()
             .ok_or(StatusCode::UNAUTHORIZED)
+    }
+}
+
+impl<S> OptionalFromRequestParts<S> for ValidatedRequestDetails
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> Result<Option<Self>, Self::Rejection> {
+        Ok(parts.extensions.get::<ValidatedRequestDetails>().cloned())
     }
 }

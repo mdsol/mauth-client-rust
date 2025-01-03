@@ -7,6 +7,8 @@ the MAuth protocol, and verify the responses. Usage example:
 release any code to Production or deploy in a Client-accessible environment without getting
 approval for the full stack used through the Architecture and Security groups.
 
+## Outgoing Requests
+
 ```no_run
 use mauth_client::MAuthInfo;
 use reqwest::Client;
@@ -49,6 +51,8 @@ match client.get("https://www.example.com/").send().await {
 # }
 ```
 
+## Incoming Requests
+
 The optional `axum-service` feature provides for a Tower Layer and Service that will
 authenticate incoming requests via MAuth V2 or V1 and provide to the lower layers a
 validated app_uuid from the request via the `ValidatedRequestDetails` struct. Note that
@@ -65,6 +69,104 @@ Unauthorized status code if the extension is not present. If you would like to r
 a different response, or respond to the lack of the extension in another way, you can
 use a more manual mechanism to check for the extension and decide how to proceed if it
 is not present.
+
+### Examples for `RequiredMAuthValidationLayer`
+
+```no_run
+# async fn run_server() {
+use mauth_client::{
+    axum_service::RequiredMAuthValidationLayer,
+    validate_incoming::ValidatedRequestDetails,
+};
+use axum::{http::StatusCode, Router, routing::get, serve};
+use tokio::net::TcpListener;
+
+// If there is not a valid mauth signature, this function will never run at all, and
+// the request will return an empty 401 Unauthorized
+async fn foo() -> StatusCode {
+    StatusCode::OK
+}
+
+// In addition to returning a 401 Unauthorized without running if there is not a valid
+// MAuth signature, this also makes the validated requesting app UUID available to
+// the function
+async fn bar(details: ValidatedRequestDetails) -> StatusCode {
+    println!("Got a request from app with UUID: {}", details.app_uuid);
+    StatusCode::OK
+}
+
+// This function will run regardless of whether or not there is a mauth signature
+async fn baz() -> StatusCode {
+    StatusCode::OK
+}
+
+// Attaching the baz route handler after the layer means the layer is not run for
+// requests to that path, so no mauth checking will be performed for that route and
+// any other routes attached after the layer
+let router = Router::new()
+    .route("/foo", get(foo))
+    .route("/bar", get(bar))
+    .layer(RequiredMAuthValidationLayer::from_default_file().unwrap())
+    .route("/baz", get(baz));
+let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+serve(listener, router).await.unwrap();
+# }
+```
+
+### Examples for `OptionalMAuthValidationLayer`
+
+```no_run
+# async fn run_server() {
+use mauth_client::{
+    axum_service::OptionalMAuthValidationLayer,
+    validate_incoming::ValidatedRequestDetails,
+};
+use axum::{http::StatusCode, Router, routing::get, serve};
+use tokio::net::TcpListener;
+
+// This request will run no matter what the authorization status is
+async fn foo() -> StatusCode {
+    StatusCode::OK
+}
+
+// If there is not a valid mauth signature, this function will never run at all, and
+// the request will return an empty 401 Unauthorized
+async fn bar(_: ValidatedRequestDetails) -> StatusCode {
+    StatusCode::OK
+}
+
+// In addition to returning a 401 Unauthorized without running if there is not a valid
+// MAuth signature, this also makes the validated requesting app UUID available to
+// the function
+async fn baz(details: ValidatedRequestDetails) -> StatusCode {
+    println!("Got a request from app with UUID: {}", details.app_uuid);
+    StatusCode::OK
+}
+
+// This request will run whether or not there is a valid mauth signature, but the Option
+// provided can be used to tell you whether there was a valid signature, so you can
+// implement things like multiple possible types of authentication or behavior other than
+// a 401 return if there is no authentication
+async fn bam(optional_details: Option<ValidatedRequestDetails>) -> StatusCode {
+    match optional_details {
+        Some(details) => println!("Got a request from app with UUID: {}", details.app_uuid),
+        None => println!("Got a request without a valid mauth signature"),
+    }
+    StatusCode::OK
+}
+
+let router = Router::new()
+    .route("/foo", get(foo))
+    .route("/bar", get(bar))
+    .route("/baz", get(baz))
+    .route("/bam", get(bam))
+    .layer(OptionalMAuthValidationLayer::from_default_file().unwrap());
+let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+serve(listener, router).await.unwrap();
+# }
+```
+
+### OpenTelemetry Integration
 
 There are also optional features `tracing-otel-26` and `tracing-otel-27` that pair with
 the `axum-service` feature to ensure that any outgoing requests for credentials that take

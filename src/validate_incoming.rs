@@ -1,8 +1,10 @@
 use crate::{MAuthInfo, CLIENT, PUBKEY_CACHE};
 use axum::extract::Request;
+use bytes::Bytes;
 use chrono::prelude::*;
 use mauth_core::verifier::Verifier;
 use thiserror::Error;
+use tracing::error;
 use uuid::Uuid;
 
 /// This struct holds the app UUID for a validated request. It is meant to be used with the
@@ -59,15 +61,26 @@ impl MAuthInfo {
         }
     }
 
-    pub(crate) async fn validate_request_optionally(
-        &self,
-        req: Request,
-    ) -> Result<Request, axum::Error> {
+    pub(crate) async fn validate_request_optionally(&self, req: Request) -> Request {
         let (mut parts, body) = req.into_parts();
         if parts.headers.contains_key(MAUTH_V2_SIGNATURE_HEADER)
             || parts.headers.contains_key(MAUTH_V1_SIGNATURE_HEADER)
         {
-            let body_bytes = axum::body::to_bytes(body, usize::MAX).await?;
+            // By my reading of the code for this it should never fail, since we are passing
+            // MAX for the limit. But just to be safe, we will log the error and proceed with
+            // an empty body just in case instead of unwrapping. This would cause the body to
+            // be unavailable to the lower layers, but they would probably also fail to get it
+            // anyways since we just did here.
+            let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    error!(
+                        error = ?err,
+                        "Failed to retrieve request body, continuing with empty body"
+                    );
+                    Bytes::new()
+                }
+            };
 
             match self.validate_request_v2(&parts, &body_bytes).await {
                 Ok(host_app_uuid) => {
@@ -95,9 +108,9 @@ impl MAuthInfo {
 
             let new_body = axum::body::Body::from(body_bytes);
             let new_request = Request::from_parts(parts, new_body);
-            Ok(new_request)
+            new_request
         } else {
-            Ok(Request::from_parts(parts, body))
+            Request::from_parts(parts, body)
         }
     }
 
