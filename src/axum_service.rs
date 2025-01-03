@@ -13,7 +13,7 @@ use std::task::{Context, Poll};
 use tower::{Layer, Service};
 use tracing::error;
 
-use crate::validate_incoming::ValidatedRequestDetails;
+use crate::validate_incoming::{MAuthValidationError, ValidatedRequestDetails};
 use crate::{
     config::{ConfigFileSection, ConfigReadError},
     MAuthInfo,
@@ -226,5 +226,19 @@ where
         _state: &S,
     ) -> Result<Option<Self>, Self::Rejection> {
         Ok(parts.extensions.get::<ValidatedRequestDetails>().cloned())
+    }
+}
+
+impl<S> OptionalFromRequestParts<S> for MAuthValidationError
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> Result<Option<Self>, Self::Rejection> {
+        Ok(parts.extensions.get::<MAuthValidationError>().cloned())
     }
 }

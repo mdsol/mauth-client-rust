@@ -166,6 +166,20 @@ serve(listener, router).await.unwrap();
 # }
 ```
 
+### Error Handling
+
+Both the `RequiredMAuthValidationLayer` and the `OptionalMAuthValidationLayer` layers will
+log errors encountered via `tracing` under the `mauth_client::validate_incoming` target.
+
+The Required layer returns the 401 response immediately, so there is no convenient way to
+retrieve the error in order to do anything more sophisticated with it.
+
+The Optional layer, in addition to loging the error, will also add the `MAuthValidationError`
+to the request extensions. If desired, any request handlers or middlewares can retrieve it
+from there in order to take further actions based on the error type. This error type also
+implements Axum's `OptionalFromRequestParts`, so you can more easily retrieve it using
+`Option<MAuthValidationError>` anywhere that supports extractors.
+
 ### OpenTelemetry Integration
 
 There are also optional features `tracing-otel-26` and `tracing-otel-27` that pair with
