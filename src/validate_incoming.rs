@@ -73,9 +73,9 @@ impl MAuthInfo {
             // anyways since we just did here.
             let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
                 Ok(bytes) => bytes,
-                Err(err) => {
+                Err(error) => {
                     error!(
-                        error = ?err,
+                        ?error,
                         "Failed to retrieve request body, continuing with empty body"
                     );
                     Bytes::new()
@@ -88,7 +88,7 @@ impl MAuthInfo {
                         app_uuid: host_app_uuid,
                     });
                 }
-                Err(err) => {
+                Err(error_v2) => {
                     if self.allow_v1_auth {
                         match self.validate_request_v1(&parts, &body_bytes).await {
                             Ok(host_app_uuid) => {
@@ -96,12 +96,18 @@ impl MAuthInfo {
                                     app_uuid: host_app_uuid,
                                 });
                             }
-                            Err(err) => {
-                                parts.extensions.insert(err);
+                            Err(error_v1) => {
+                                error!(
+                                    ?error_v2,
+                                    ?error_v1,
+                                    "Error attempting to validate MAuth signatures"
+                                );
+                                parts.extensions.insert(error_v1);
                             }
                         }
                     } else {
-                        parts.extensions.insert(err);
+                        error!(?error_v2, "Error attempting to validate MAuth V2 signature");
+                        parts.extensions.insert(error_v2);
                     }
                 }
             }
