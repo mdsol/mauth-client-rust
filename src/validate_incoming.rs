@@ -107,8 +107,7 @@ impl MAuthInfo {
             }
 
             let new_body = axum::body::Body::from(body_bytes);
-            let new_request = Request::from_parts(parts, new_body);
-            new_request
+            Request::from_parts(parts, new_body)
         } else {
             Request::from_parts(parts, body)
         }
