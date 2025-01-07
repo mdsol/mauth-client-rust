@@ -1,6 +1,6 @@
 [package]
 name = "mauth-client"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Mason Gup <mgup@mdsol.com>"]
 edition = "2021"
 documentation = "https://docs.rs/mauth-client/"
@@ -26,17 +26,18 @@ dirs = "5"
 chrono = "0.4"
 tokio = { version = "1", features = ["fs"] }
 tower = { version = "0.4", optional = true }
-axum = { version = ">= 0.7.2", optional = true }
+axum = { version = ">= 0.8", optional = true }
 futures-core = { version = "0.3", optional = true }
 http = "1"
 bytes = { version = "1", optional = true }
 thiserror = "1"
-mauth-core = "0.5"
+mauth-core = "0.6"
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [features]
-axum-service = ["tower", "futures-core", "axum", "bytes"]
+axum-service = ["tower", "futures-core", "axum", "bytes", "tracing"]
 tracing-otel-26 = ["reqwest-tracing/opentelemetry_0_26"]
 tracing-otel-27 = ["reqwest-tracing/opentelemetry_0_27"]

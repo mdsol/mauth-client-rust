@@ -1,7 +1,10 @@
 use crate::{MAuthInfo, CLIENT, PUBKEY_CACHE};
+use axum::extract::Request;
+use bytes::Bytes;
 use chrono::prelude::*;
 use mauth_core::verifier::Verifier;
 use thiserror::Error;
+use tracing::error;
 use uuid::Uuid;
 
 /// This struct holds the app UUID for a validated request. It is meant to be used with the
@@ -15,11 +18,16 @@ pub struct ValidatedRequestDetails {
     pub app_uuid: Uuid,
 }
 
+const MAUTH_V1_SIGNATURE_HEADER: &str = "X-MWS-Authentication";
+const MAUTH_V2_SIGNATURE_HEADER: &str = "MCC-Authentication";
+const MAUTH_V1_TIMESTAMP_HEADER: &str = "X-MWS-Time";
+const MAUTH_V2_TIMESTAMP_HEADER: &str = "MCC-Time";
+
 impl MAuthInfo {
     pub(crate) async fn validate_request(
         &self,
-        req: axum::extract::Request,
-    ) -> Result<axum::extract::Request, MAuthValidationError> {
+        req: Request,
+    ) -> Result<Request, MAuthValidationError> {
         let (mut parts, body) = req.into_parts();
         let body_bytes = axum::body::to_bytes(body, usize::MAX)
             .await
@@ -30,7 +38,7 @@ impl MAuthInfo {
                     app_uuid: host_app_uuid,
                 });
                 let new_body = axum::body::Body::from(body_bytes);
-                let new_request = axum::extract::Request::from_parts(parts, new_body);
+                let new_request = Request::from_parts(parts, new_body);
                 Ok(new_request)
             }
             Err(err) => {
@@ -41,7 +49,7 @@ impl MAuthInfo {
                                 app_uuid: host_app_uuid,
                             });
                             let new_body = axum::body::Body::from(body_bytes);
-                            let new_request = axum::extract::Request::from_parts(parts, new_body);
+                            let new_request = Request::from_parts(parts, new_body);
                             Ok(new_request)
                         }
                         Err(err) => Err(err),
@@ -53,6 +61,64 @@ impl MAuthInfo {
         }
     }
 
+    pub(crate) async fn validate_request_optionally(&self, req: Request) -> Request {
+        let (mut parts, body) = req.into_parts();
+        if parts.headers.contains_key(MAUTH_V2_SIGNATURE_HEADER)
+            || parts.headers.contains_key(MAUTH_V1_SIGNATURE_HEADER)
+        {
+            // By my reading of the code for this it should never fail, since we are passing
+            // MAX for the limit. But just to be safe, we will log the error and proceed with
+            // an empty body just in case instead of unwrapping. This would cause the body to
+            // be unavailable to the lower layers, but they would probably also fail to get it
+            // anyways since we just did here.
+            let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    error!(
+                        ?error,
+                        "Failed to retrieve request body, continuing with empty body"
+                    );
+                    Bytes::new()
+                }
+            };
+
+            match self.validate_request_v2(&parts, &body_bytes).await {
+                Ok(host_app_uuid) => {
+                    parts.extensions.insert(ValidatedRequestDetails {
+                        app_uuid: host_app_uuid,
+                    });
+                }
+                Err(error_v2) => {
+                    if self.allow_v1_auth {
+                        match self.validate_request_v1(&parts, &body_bytes).await {
+                            Ok(host_app_uuid) => {
+                                parts.extensions.insert(ValidatedRequestDetails {
+                                    app_uuid: host_app_uuid,
+                                });
+                            }
+                            Err(error_v1) => {
+                                error!(
+                                    ?error_v2,
+                                    ?error_v1,
+                                    "Error attempting to validate MAuth signatures"
+                                );
+                                parts.extensions.insert(error_v1);
+                            }
+                        }
+                    } else {
+                        error!(?error_v2, "Error attempting to validate MAuth V2 signature");
+                        parts.extensions.insert(error_v2);
+                    }
+                }
+            }
+
+            let new_body = axum::body::Body::from(body_bytes);
+            Request::from_parts(parts, new_body)
+        } else {
+            Request::from_parts(parts, body)
+        }
+    }
+
     async fn validate_request_v2(
         &self,
         req: &http::request::Parts,
@@ -61,7 +127,7 @@ impl MAuthInfo {
         //retrieve and parse auth string
         let sig_header = req
             .headers
-            .get("MCC-Authentication")
+            .get(MAUTH_V2_SIGNATURE_HEADER)
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
@@ -70,7 +136,7 @@ impl MAuthInfo {
         //retrieve and validate timestamp
         let ts_str = req
             .headers
-            .get("MCC-Time")
+            .get(MAUTH_V2_TIMESTAMP_HEADER)
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidTime)?;
@@ -107,7 +173,7 @@ impl MAuthInfo {
         //retrieve and parse auth string
         let sig_header = req
             .headers
-            .get("X-MWS-Authentication")
+            .get(MAUTH_V1_SIGNATURE_HEADER)
             .ok_or(MAuthValidationError::NoSig)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
@@ -116,7 +182,7 @@ impl MAuthInfo {
         //retrieve and validate timestamp
         let ts_str = req
             .headers
-            .get("X-MWS-Time")
+            .get(MAUTH_V1_TIMESTAMP_HEADER)
             .ok_or(MAuthValidationError::NoTime)?
             .to_str()
             .map_err(|_| MAuthValidationError::InvalidTime)?;
@@ -218,7 +284,7 @@ impl MAuthInfo {
 }
 
 /// All of the possible errors that can take place when attempting to verify a response signature
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum MAuthValidationError {
     /// The timestamp of the response was either invalid or outside of the permitted
     /// range
