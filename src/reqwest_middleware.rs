@@ -2,7 +2,7 @@ use http::Extensions;
 use reqwest::{Request, Response};
 use reqwest_middleware::{Middleware, Next, Result};
 
-use crate::{sign_outgoing::SigningError, MAuthInfo};
+use crate::{MAuthInfo, sign_outgoing::SigningError};
 
 #[async_trait::async_trait]
 impl Middleware for MAuthInfo {

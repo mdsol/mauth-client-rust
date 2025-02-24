@@ -1,8 +1,8 @@
 [package]
 name = "mauth-client"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["Mason Gup <mgup@mdsol.com>"]
-edition = "2021"
+edition = "2024"
 documentation = "https://docs.rs/mauth-client/"
 license = "MIT"
 description = "Sign requests and validate responses using the Medidata MAuth protocol"
@@ -15,7 +15,7 @@ categories = ["authentication", "web-programming"]
 [dependencies]
 reqwest = { version = "0.12", features = ["json"] }
 reqwest-middleware = "0.4"
-reqwest-tracing = { version = "0.5.5", optional = true }
+reqwest-tracing = { version = "0.5.6", optional = true }
 async-trait = ">= 0.1.83"
 url = "2"
 serde = { version = "1", features = ["derive"] }
@@ -41,3 +41,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 axum-service = ["tower", "futures-core", "axum", "bytes", "tracing"]
 tracing-otel-26 = ["reqwest-tracing/opentelemetry_0_26"]
 tracing-otel-27 = ["reqwest-tracing/opentelemetry_0_27"]
+tracing-otel-28 = ["reqwest-tracing/opentelemetry_0_28"]

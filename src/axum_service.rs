@@ -6,7 +6,7 @@ use axum::{
     response::IntoResponse,
 };
 use futures_core::future::BoxFuture;
-use http::{request::Parts, Response, StatusCode};
+use http::{Response, StatusCode, request::Parts};
 use std::convert::Infallible;
 use std::error::Error;
 use std::task::{Context, Poll};
@@ -15,8 +15,8 @@ use tracing::error;
 
 use crate::validate_incoming::{MAuthValidationError, ValidatedRequestDetails};
 use crate::{
-    config::{ConfigFileSection, ConfigReadError},
     MAuthInfo,
+    config::{ConfigFileSection, ConfigReadError},
 };
 
 /// This is a Tower Service which validates that incoming requests have a valid

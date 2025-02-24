@@ -1,6 +1,6 @@
 use crate::MAuthInfo;
 use chrono::prelude::*;
-use reqwest::{header::HeaderValue, Request};
+use reqwest::{Request, header::HeaderValue};
 use thiserror::Error;
 
 impl MAuthInfo {
