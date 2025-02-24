@@ -1,4 +1,4 @@
-use crate::{MAuthInfo, CLIENT};
+use crate::{CLIENT, MAuthInfo};
 use mauth_core::signer::Signer;
 use reqwest::Client;
 use reqwest::Url;
@@ -62,7 +62,11 @@ impl MAuthInfo {
 
         CLIENT.get_or_init(|| {
             let builder = ClientBuilder::new(Client::new()).with(mauth_info.clone());
-            #[cfg(any(feature = "tracing-otel-26", feature = "tracing-otel-27"))]
+            #[cfg(any(
+                feature = "tracing-otel-26",
+                feature = "tracing-otel-27",
+                feature = "tracing-otel-28"
+            ))]
             let builder = builder.with(reqwest_tracing::TracingMiddleware::default());
             builder.build()
         });

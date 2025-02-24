@@ -1,4 +1,4 @@
-use crate::{MAuthInfo, CLIENT, PUBKEY_CACHE};
+use crate::{CLIENT, MAuthInfo, PUBKEY_CACHE};
 use axum::extract::Request;
 use bytes::Bytes;
 use chrono::prelude::*;
