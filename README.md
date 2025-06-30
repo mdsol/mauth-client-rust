@@ -182,7 +182,7 @@ implements Axum's `OptionalFromRequestParts`, so you can more easily retrieve it
 
 ### OpenTelemetry Integration
 
-There are also optional features `tracing-otel-26`, `tracing-otel-27`, and `tracing-otel-28`
+There are also optional features `tracing-otel-26` through `tracing-otel-30`
 that pair with the `axum-service` feature to ensure that any outgoing requests for credentials
 that take place in the context of an incoming web request also include the proper OpenTelemetry
 span information in any requests to MAudit services. Note that it is critical to use the same

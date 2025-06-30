@@ -259,22 +259,16 @@ impl MAuthInfo {
         match mauth_response {
             Err(_) => None,
             Ok(response) => {
-                if let Ok(response_obj) = response.json::<serde_json::Value>().await {
-                    if let Some(pub_key_str) = response_obj
+                if let Ok(response_obj) = response.json::<serde_json::Value>().await
+                    && let Some(pub_key_str) = response_obj
                         .pointer("/security_token/public_key_str")
                         .and_then(|s| s.as_str())
                         .map(|st| st.to_owned())
-                    {
-                        if let Ok(verifier) = Verifier::new(*app_uuid, pub_key_str) {
-                            let mut key_store = PUBKEY_CACHE.write().unwrap();
-                            key_store.insert(*app_uuid, verifier.clone());
-                            Some(verifier)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+                    && let Ok(verifier) = Verifier::new(*app_uuid, pub_key_str)
+                {
+                    let mut key_store = PUBKEY_CACHE.write().unwrap();
+                    key_store.insert(*app_uuid, verifier.clone());
+                    Some(verifier)
                 } else {
                     None
                 }

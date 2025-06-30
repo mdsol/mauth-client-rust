@@ -65,7 +65,9 @@ impl MAuthInfo {
             #[cfg(any(
                 feature = "tracing-otel-26",
                 feature = "tracing-otel-27",
-                feature = "tracing-otel-28"
+                feature = "tracing-otel-28",
+                feature = "tracing-otel-29",
+                feature = "tracing-otel-30",
             ))]
             let builder = builder.with(reqwest_tracing::TracingMiddleware::default());
             builder.build()
@@ -124,7 +126,7 @@ impl From<mauth_core::error::Error> for ConfigReadError {
     fn from(err: mauth_core::error::Error) -> ConfigReadError {
         match err {
             mauth_core::error::Error::PrivateKeyDecodeError(pkey_err) => {
-                ConfigReadError::PrivateKeyDecodeError(format!("{}", pkey_err))
+                ConfigReadError::PrivateKeyDecodeError(format!("{pkey_err}"))
             }
             _ => panic!("should not be possible to get this error type from signer construction"),
         }
