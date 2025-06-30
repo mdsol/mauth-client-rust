@@ -65,7 +65,9 @@ impl MAuthInfo {
             #[cfg(any(
                 feature = "tracing-otel-26",
                 feature = "tracing-otel-27",
-                feature = "tracing-otel-28"
+                feature = "tracing-otel-28",
+                feature = "tracing-otel-29",
+                feature = "tracing-otel-30",
             ))]
             let builder = builder.with(reqwest_tracing::TracingMiddleware::default());
             builder.build()
