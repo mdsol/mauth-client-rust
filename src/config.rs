@@ -124,7 +124,7 @@ impl From<mauth_core::error::Error> for ConfigReadError {
     fn from(err: mauth_core::error::Error) -> ConfigReadError {
         match err {
             mauth_core::error::Error::PrivateKeyDecodeError(pkey_err) => {
-                ConfigReadError::PrivateKeyDecodeError(format!("{}", pkey_err))
+                ConfigReadError::PrivateKeyDecodeError(format!("{pkey_err}"))
             }
             _ => panic!("should not be possible to get this error type from signer construction"),
         }
