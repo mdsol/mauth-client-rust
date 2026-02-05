@@ -43,10 +43,10 @@ impl MAuthInfo {
         .parse()?;
 
         let mut pk_data = section.private_key_data.clone();
-        if pk_data.is_none() && section.private_key_file.is_some() {
-            pk_data = Some(std::fs::read_to_string(
-                section.private_key_file.as_ref().unwrap(),
-            )?);
+        if pk_data.is_none()
+            && let Some(pk_file_path) = section.private_key_file.as_ref()
+        {
+            pk_data = Some(std::fs::read_to_string(pk_file_path)?);
         }
         if pk_data.is_none() {
             return Err(ConfigReadError::NoPrivateKey);
@@ -68,6 +68,7 @@ impl MAuthInfo {
                 feature = "tracing-otel-28",
                 feature = "tracing-otel-29",
                 feature = "tracing-otel-30",
+                feature = "tracing-otel-31",
             ))]
             let builder = builder.with(reqwest_tracing::TracingMiddleware::default());
             builder.build()
