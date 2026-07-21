@@ -1,0 +1,20 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+spec:
+  type: library
+  lifecycle: production
+  owner: ae@mdsol.com
+  experience: enablement
+metadata:
+  json_schema: https://github.com/mdsol/platform-standards/tree/main/schemas/v1alpha1.schema.json
+  name: mauth-core
+  title: MAuth Core
+  description: A library to generate and verify MAuth signatures
+  teams:
+    - name: Architecture Enablement
+      number: 119
+  people:
+    - role: technical owner
+      email: ykitamura@mdsol.com
+  annotations:
+    product: N/A
