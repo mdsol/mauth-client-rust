@@ -15,11 +15,10 @@ struct TestSignConfig {
 
 const BASE_PATH: &str = "mauth-protocol-test-suite/protocols/MWSV2/";
 
-async fn setup_mauth_info() -> (MAuthInfo, String, u64) {
+async fn setup_mauth_info() -> (MAuthInfo, u64) {
     let config_path = Path::new("mauth-protocol-test-suite/signing-config.json");
     let sign_config: TestSignConfig =
         serde_json::from_slice(&fs::read(config_path).await.unwrap()).unwrap();
-    let app_uuid = sign_config.app_uuid.clone();
     let mock_config_section = ConfigFileSection {
         app_uuid: sign_config.app_uuid,
         mauth_baseurl: "https://www.example.com/".to_string(),
@@ -34,13 +33,12 @@ async fn setup_mauth_info() -> (MAuthInfo, String, u64) {
     };
     (
         MAuthInfo::from_config_section(&mock_config_section).unwrap(),
-        app_uuid,
         sign_config.request_time,
     )
 }
 
 async fn test_generate_headers(file_name: String) {
-    let (mauth_info, _, req_time) = setup_mauth_info().await;
+    let (mauth_info, req_time) = setup_mauth_info().await;
 
     let mut sig_file_path = PathBuf::from(&BASE_PATH);
     sig_file_path.push(format!("{name}/{name}.sig", name = &file_name));
@@ -76,7 +74,8 @@ async fn test_generate_headers(file_name: String) {
 
 #[tokio::test]
 async fn sign_request_v1_sets_protocol_compliant_headers() {
-    let (mauth_info, app_uuid, _) = setup_mauth_info().await;
+    let (mauth_info, _) = setup_mauth_info().await;
+    let app_uuid = mauth_info.app_id;
     let mut request = Request::new(Method::GET, url::Url::parse("http://www.a.com/").unwrap());
     mauth_info.sign_request_v1(&mut request).unwrap();
 

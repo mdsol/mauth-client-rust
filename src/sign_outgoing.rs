@@ -90,7 +90,7 @@ impl MAuthInfo {
         Ok(())
     }
 
-    pub(crate) fn set_headers_v1(&self, req: &mut Request, signature: String, timestamp_str: &str) {
+    fn set_headers_v1(&self, req: &mut Request, signature: String, timestamp_str: &str) {
         let sig_head_str = format!("MWS {}:{}", self.app_id, signature);
         let headers = req.headers_mut();
         headers.insert("X-MWS-Time", HeaderValue::from_str(timestamp_str).unwrap());
