@@ -41,11 +41,11 @@ async fn test_generate_headers(file_name: String) {
     let (mauth_info, req_time) = setup_mauth_info().await;
 
     let mut sig_file_path = PathBuf::from(&BASE_PATH);
-    sig_file_path.push(format!("{name}/{name}.sig", name = &file_name));
+    sig_file_path.push(format!("{name}/{name}.sig", name = file_name));
     let sig = String::from_utf8(fs::read(sig_file_path).await.unwrap()).unwrap();
 
     let mut authz_file_path = PathBuf::from(&BASE_PATH);
-    authz_file_path.push(format!("{name}/{name}.authz", name = &file_name));
+    authz_file_path.push(format!("{name}/{name}.authz", name = file_name));
     let auth_headers: serde_json::Value =
         serde_json::from_slice(&fs::read(authz_file_path).await.unwrap()).unwrap();
 

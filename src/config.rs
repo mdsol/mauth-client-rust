@@ -38,7 +38,7 @@ impl MAuthInfo {
     pub fn from_config_section(section: &ConfigFileSection) -> Result<MAuthInfo, ConfigReadError> {
         let full_uri: Url = format!(
             "{}/mauth/{}/security_tokens/",
-            &section.mauth_baseurl, &section.mauth_api_version
+            section.mauth_baseurl, section.mauth_api_version
         )
         .parse()?;
 

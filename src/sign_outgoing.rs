@@ -51,7 +51,7 @@ impl MAuthInfo {
     }
 
     pub(crate) fn set_headers_v2(&self, req: &mut Request, signature: String, timestamp_str: &str) {
-        let sig_head_str = format!("MWSV2 {}:{};", self.app_id, &signature);
+        let sig_head_str = format!("MWSV2 {}:{};", self.app_id, signature);
         let headers = req.headers_mut();
         headers.insert("MCC-Time", HeaderValue::from_str(timestamp_str).unwrap());
         headers.insert(
