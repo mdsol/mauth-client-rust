@@ -7,9 +7,9 @@ spec:
   experience: enablement
 metadata:
   json_schema: https://github.com/mdsol/platform-standards/tree/main/schemas/v1alpha1.schema.json
-  name: mauth-core
-  title: MAuth Core
-  description: A library to generate and verify MAuth signatures
+  name: mauth-client-rust
+  title: MAuth Client Rust
+  description: A client library for MAuth in Rust.
   teams:
     - name: Architecture Enablement
       number: 119
