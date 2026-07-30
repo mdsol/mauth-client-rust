@@ -1,0 +1,20 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+spec:
+  type: library
+  lifecycle: production
+  owner: ae@mdsol.com
+  experience: enablement
+metadata:
+  json_schema: https://github.com/mdsol/platform-standards/tree/main/schemas/v1alpha1.schema.json
+  name: mauth-client-rust
+  title: MAuth Client Rust
+  description: A client library for MAuth in Rust.
+  teams:
+    - name: Architecture Enablement
+      number: 119
+  people:
+    - role: technical owner
+      email: ykitamura@mdsol.com
+  annotations:
+    product: N/A

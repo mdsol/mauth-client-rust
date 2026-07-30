@@ -254,7 +254,7 @@ impl MAuthInfo {
                 return Some(pub_key.clone());
             }
         }
-        let uri = self.mauth_uri_base.join(&format!("{}", &app_uuid)).unwrap();
+        let uri = self.mauth_uri_base.join(&format!("{}", app_uuid)).unwrap();
         let mauth_response = CLIENT.get().unwrap().get(uri).send().await;
         match mauth_response {
             Err(_) => None,

@@ -1,4 +1,5 @@
 use crate::{MAuthInfo, config::ConfigFileSection};
+use mauth_core::verifier::Verifier;
 use reqwest::{Method, Request};
 use serde::Deserialize;
 use tokio::fs;
@@ -40,11 +41,11 @@ async fn test_generate_headers(file_name: String) {
     let (mauth_info, req_time) = setup_mauth_info().await;
 
     let mut sig_file_path = PathBuf::from(&BASE_PATH);
-    sig_file_path.push(format!("{name}/{name}.sig", name = &file_name));
+    sig_file_path.push(format!("{name}/{name}.sig", name = file_name));
     let sig = String::from_utf8(fs::read(sig_file_path).await.unwrap()).unwrap();
 
     let mut authz_file_path = PathBuf::from(&BASE_PATH);
-    authz_file_path.push(format!("{name}/{name}.authz", name = &file_name));
+    authz_file_path.push(format!("{name}/{name}.authz", name = file_name));
     let auth_headers: serde_json::Value =
         serde_json::from_slice(&fs::read(authz_file_path).await.unwrap()).unwrap();
 
@@ -69,6 +70,42 @@ async fn test_generate_headers(file_name: String) {
 
     assert_eq!(expected_time, time_header);
     assert_eq!(expected_sig, sig_header);
+}
+
+#[tokio::test]
+async fn sign_request_v1_sets_protocol_compliant_headers() {
+    let (mauth_info, _) = setup_mauth_info().await;
+    let app_uuid = mauth_info.app_id;
+    let mut request = Request::new(Method::GET, url::Url::parse("http://www.a.com/").unwrap());
+    mauth_info.sign_request_v1(&mut request).unwrap();
+
+    let headers = request.headers();
+    let timestamp = headers.get("X-MWS-Time").unwrap().to_str().unwrap();
+    let auth_header = headers
+        .get("X-MWS-Authentication")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let signature = auth_header
+        .strip_prefix(&format!("MWS {app_uuid}:"))
+        .expect("v1 authentication header must contain its protocol token and app UUID");
+    assert!(!signature.is_empty());
+
+    let public_key = fs::read_to_string("mauth-protocol-test-suite/signing-params/rsa-key-pub")
+        .await
+        .unwrap();
+    Verifier::new(app_uuid, public_key)
+        .unwrap()
+        .verify_signature(
+            1,
+            request.method().as_str(),
+            request.url().path(),
+            request.url().query().unwrap_or(""),
+            &[],
+            timestamp,
+            signature,
+        )
+        .unwrap();
 }
 
 include!(concat!(env!("OUT_DIR"), "/protocol_tests.rs"));

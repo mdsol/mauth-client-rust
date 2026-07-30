@@ -14,7 +14,7 @@ fn main() {
                 r_path.file_name().unwrap().to_str().unwrap().to_string(),
             )
         })
-        .filter(|(path, name)| path.join(format!("{}.sts", &name)).exists())
+        .filter(|(path, name)| path.join(format!("{}.sts", name)).exists())
         .map(|(_, name)| name)
         .collect();
 
@@ -30,8 +30,8 @@ async fn {formatted_name}_generate_headers() {{
     test_generate_headers("{name}".to_string()).await;
 }}
 "#,
-            formatted_name = &formatted_name,
-            name = &name
+            formatted_name = formatted_name,
+            name = name
         ));
     }
     fs::write(Path::new(&out_dir).join("protocol_tests.rs"), &code_str).unwrap();

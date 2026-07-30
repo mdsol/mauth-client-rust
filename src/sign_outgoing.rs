@@ -51,7 +51,7 @@ impl MAuthInfo {
     }
 
     pub(crate) fn set_headers_v2(&self, req: &mut Request, signature: String, timestamp_str: &str) {
-        let sig_head_str = format!("MWSV2 {}:{};", self.app_id, &signature);
+        let sig_head_str = format!("MWSV2 {}:{};", self.app_id, signature);
         let headers = req.headers_mut();
         headers.insert("MCC-Time", HeaderValue::from_str(timestamp_str).unwrap());
         headers.insert(
@@ -86,10 +86,18 @@ impl MAuthInfo {
             timestamp_str.clone(),
         )?;
 
-        let headers = req.headers_mut();
-        headers.insert("X-MWS-Time", HeaderValue::from_str(&timestamp_str).unwrap());
-        headers.insert("X-MWS-Authentication", HeaderValue::from_str(&sig).unwrap());
+        self.set_headers_v1(req, sig, &timestamp_str);
         Ok(())
+    }
+
+    fn set_headers_v1(&self, req: &mut Request, signature: String, timestamp_str: &str) {
+        let sig_head_str = format!("MWS {}:{}", self.app_id, signature);
+        let headers = req.headers_mut();
+        headers.insert("X-MWS-Time", HeaderValue::from_str(timestamp_str).unwrap());
+        headers.insert(
+            "X-MWS-Authentication",
+            HeaderValue::from_str(&sig_head_str).unwrap(),
+        );
     }
 }
 
