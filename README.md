@@ -197,8 +197,8 @@ Verifying an incoming signature needs the sending app's public key, which is fet
 MAuth and then cached in process. Entries expire according to the `Cache-Control` headers
 on MAuth's own response, so rotating an application's key takes effect within the lifetime
 MAuth states, without restarting anything. A response arriving without a usable directive
-is cached for 60 seconds, matching the MAuth service's own default, so that MAuth does not
-become a synchronous dependency of every authenticated request. Lookups that MAuth answers
+is cached for a conservative 60 seconds, so that MAuth does not become a synchronous
+dependency of every authenticated request. Lookups that MAuth answers
 with a 404 are not cached at all, so an app registered moments ago authenticates
 immediately.
 

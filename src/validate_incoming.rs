@@ -25,9 +25,9 @@ pub(crate) const DEFAULT_PUBKEY_CACHE_CAPACITY: usize = 10_000;
 
 /// How long a key is trusted when MAuth does not say.
 ///
-/// Matches the MAuth service's own `TOKEN_EXPIRATION` default, so a response
-/// that arrives without usable cache headers is treated the way an unconfigured
-/// MAuth would have asked for.
+/// Deliberately short. It exists so that a response arriving without usable
+/// cache headers cannot make MAuth a synchronous dependency of every
+/// authenticated request, while still letting a rotated key converge quickly.
 const FALLBACK_KEY_LIFETIME: Duration = Duration::from_secs(60);
 
 /// This struct holds the app UUID for a validated request. It is meant to be used with the
@@ -373,12 +373,10 @@ enum Freshness {
 
 /// When a MAuth response stops being reusable.
 ///
-/// MAuth states its own policy -- `max-age=300, public` on a hit today, though
-/// the service reads that from an environment variable and its own default is
-/// 60 -- so this honors what the origin says rather than assuming a number. A
-/// response with no usable directive falls back to [`FALLBACK_KEY_LIFETIME`],
-/// which keeps MAuth from becoming a synchronous dependency of every single
-/// authenticated request if those headers ever regress.
+/// The serving side decides how long its keys may be reused and states that in
+/// the response, so this honors what the origin says rather than assuming a
+/// number that could drift out of agreement with it. A response carrying no
+/// usable directive falls back to [`FALLBACK_KEY_LIFETIME`].
 fn cacheable_until(headers: &HeaderMap, request_started: Instant, now: Instant) -> Freshness {
     let fallback = Freshness::Until(now + FALLBACK_KEY_LIFETIME);
 
@@ -531,13 +529,13 @@ mod tests {
         let now = Instant::now();
         let secs = Duration::from_secs;
         let cases: [(&[(&str, &str)], Freshness); 10] = [
-            // What MAuth actually sends on a hit today.
+            // The ordinary case: a key that may be reused for a while.
             (
                 &[("cache-control", "max-age=300, public")],
                 Freshness::Until(now + secs(300)),
             ),
-            // What it sends on a 404, and the reason unknown apps are not
-            // negatively cached.
+            // How a not-found response is marked, and the reason an unknown
+            // app is never negatively cached.
             (&[("cache-control", "no-cache")], Freshness::DoNotStore),
             (&[("cache-control", "no-store")], Freshness::DoNotStore),
             // An explicit directive beats any max-age beside it.
