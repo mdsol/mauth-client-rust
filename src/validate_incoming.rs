@@ -378,33 +378,37 @@ enum Freshness {
 /// number that could drift out of agreement with it. A response carrying no
 /// usable directive falls back to [`FALLBACK_KEY_LIFETIME`].
 fn cacheable_until(headers: &HeaderMap, request_started: Instant, now: Instant) -> Freshness {
-    let fallback = Freshness::Until(now + FALLBACK_KEY_LIFETIME);
-
-    let Some(cache_control) = headers.get(header::CACHE_CONTROL) else {
-        return fallback;
-    };
-    let Ok(cache_control) = cache_control.to_str() else {
-        return fallback;
-    };
+    let fallback = expires_after(now, FALLBACK_KEY_LIFETIME);
 
     let mut max_age: Option<Duration> = None;
-    for directive in cache_control.split(',') {
-        let directive = directive.trim();
-        // `no-cache` permits storage with revalidation, which this cache has no
-        // way to do -- MAuth sends no ETag on the responses that carry it -- so
-        // treat it the same as `no-store`. This is the path a 404 takes.
-        if directive.eq_ignore_ascii_case("no-store") || directive.eq_ignore_ascii_case("no-cache")
-        {
+    // `Cache-Control` is a list header, and HTTP permits a list to arrive split
+    // across several field lines. Reading only the first would let a `no-store`
+    // on a later line be silently ignored.
+    for value in headers.get_all(header::CACHE_CONTROL) {
+        // A value we cannot read leaves the origin's instruction unknown, which
+        // is not the same as it having given none.
+        let Ok(value) = value.to_str() else {
             return Freshness::DoNotStore;
-        }
-        if let Some((name, seconds)) = directive.split_once('=')
-            && name.trim().eq_ignore_ascii_case("max-age")
-            && let Ok(seconds) = seconds.trim().trim_matches('"').parse::<u64>()
-        {
-            // Take the shortest of any repeats, so `max-age=0, max-age=300`
-            // is not treated as reusable.
-            let stated = Duration::from_secs(seconds);
-            max_age = Some(max_age.map_or(stated, |seen: Duration| seen.min(stated)));
+        };
+        for directive in value.split(',') {
+            let directive = directive.trim();
+            // `no-cache` permits storage with revalidation, which this cache has
+            // no way to do -- MAuth sends no ETag on the responses that carry it
+            // -- so treat it the same as `no-store`. A 404 takes this path.
+            if directive.eq_ignore_ascii_case("no-store")
+                || directive.eq_ignore_ascii_case("no-cache")
+            {
+                return Freshness::DoNotStore;
+            }
+            if let Some((name, seconds)) = directive.split_once('=')
+                && name.trim().eq_ignore_ascii_case("max-age")
+                && let Ok(seconds) = seconds.trim().trim_matches('"').parse::<u64>()
+            {
+                // Take the shortest of any repeats, so `max-age=0, max-age=300`
+                // is not treated as reusable.
+                let stated = Duration::from_secs(seconds);
+                max_age = Some(max_age.map_or(stated, |seen: Duration| seen.min(stated)));
+            }
         }
     }
 
@@ -412,18 +416,49 @@ fn cacheable_until(headers: &HeaderMap, request_started: Instant, now: Instant) 
         return fallback;
     };
 
+    // `Age` is a singleton field, so a repeated or unreadable one leaves the
+    // true age unknown. Decline rather than assume the response is fresh.
+    let mut ages = headers.get_all(header::AGE).into_iter();
+    let stated_age = match (ages.next(), ages.next()) {
+        (None, _) => Duration::ZERO,
+        (Some(_), Some(_)) => return Freshness::DoNotStore,
+        (Some(age), None) => {
+            match age
+                .to_str()
+                .ok()
+                .and_then(|age| age.trim().parse::<u64>().ok())
+            {
+                Some(seconds) => Duration::from_secs(seconds),
+                None => return Freshness::DoNotStore,
+            }
+        }
+    };
+
     // RFC 9111 4.2.3, simplified: what the origin says the response has
-    // already aged, plus how long it spent reaching us.
-    let age = headers
-        .get(header::AGE)
-        .and_then(|age| age.to_str().ok())
-        .and_then(|age| age.trim().parse::<u64>().ok())
-        .map_or(Duration::ZERO, Duration::from_secs)
-        + now.saturating_duration_since(request_started);
+    // already aged, plus how long it spent reaching us. Both halves are
+    // response-controlled, so this is checked rather than assumed to fit.
+    let Some(age) = stated_age.checked_add(now.saturating_duration_since(request_started)) else {
+        return Freshness::DoNotStore;
+    };
 
     match max_age.checked_sub(age) {
-        Some(remaining) if !remaining.is_zero() => Freshness::Until(now + remaining),
+        Some(remaining) if !remaining.is_zero() => expires_after(now, remaining),
         _ => Freshness::DoNotStore,
+    }
+}
+
+/// `now + lifetime`, or [`Freshness::DoNotStore`] when that is not
+/// representable.
+///
+/// Lifetimes here are derived from response headers, so a malformed origin or
+/// proxy must not be able to panic the process that is authenticating a
+/// request. A duration too large to add is refused rather than clamped: a
+/// response claiming it is reusable for longer than time itself is not one to
+/// trust.
+fn expires_after(now: Instant, lifetime: Duration) -> Freshness {
+    match now.checked_add(lifetime) {
+        Some(expires_at) => Freshness::Until(expires_at),
+        None => Freshness::DoNotStore,
     }
 }
 
@@ -506,10 +541,12 @@ mod tests {
     const APP_UUID: &str = "66de0549-f7ea-4f17-9984-10643f3357d1";
     const OTHER_UUID: &str = "b0021882-1049-495d-99d7-9df99a78c0e0";
 
+    /// Builds a header map, appending rather than replacing so that a repeated
+    /// name produces the multiple field lines HTTP allows for list headers.
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut headers = HeaderMap::new();
         for (name, value) in pairs {
-            headers.insert(
+            headers.append(
                 HeaderName::from_bytes(name.as_bytes()).unwrap(),
                 value.parse().unwrap(),
             );
@@ -578,6 +615,106 @@ mod tests {
                 "headers: {pairs:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_cache_control_field_line_is_considered() {
+        let now = Instant::now();
+
+        // A list header may arrive as several field lines. Reading only the
+        // first would cache this against the origin's explicit instruction.
+        assert_eq!(
+            cacheable_until(
+                &headers(&[
+                    ("cache-control", "max-age=300"),
+                    ("cache-control", "no-store"),
+                ]),
+                now,
+                now,
+            ),
+            Freshness::DoNotStore,
+        );
+        assert_eq!(
+            cacheable_until(
+                &headers(&[
+                    ("cache-control", "max-age=300"),
+                    ("cache-control", "max-age=60"),
+                ]),
+                now,
+                now,
+            ),
+            Freshness::Until(now + Duration::from_secs(60)),
+        );
+    }
+
+    #[test]
+    fn absurd_cache_values_are_refused_rather_than_panicking() {
+        let now = Instant::now();
+        let huge = u64::MAX.to_string();
+
+        // These are response-controlled, so overflow must not be able to take
+        // down the process that is trying to authenticate a request.
+        assert_eq!(
+            cacheable_until(
+                &headers(&[("cache-control", &format!("max-age={huge}"))]),
+                now,
+                now
+            ),
+            Freshness::DoNotStore,
+        );
+        assert_eq!(
+            cacheable_until(
+                &headers(&[("cache-control", "max-age=300"), ("age", &huge)]),
+                now,
+                now + Duration::from_secs(1),
+            ),
+            Freshness::DoNotStore,
+        );
+    }
+
+    #[test]
+    fn an_unreadable_directive_is_not_the_same_as_no_directive() {
+        let now = Instant::now();
+        let mut unreadable = HeaderMap::new();
+        unreadable.insert(
+            header::CACHE_CONTROL,
+            http::HeaderValue::from_bytes(b"max-age=\xff").unwrap(),
+        );
+
+        // No header at all means the origin stated no policy, and the fallback
+        // applies. A header we cannot read means it stated one we failed to
+        // understand, which is not something to guess at.
+        assert_eq!(
+            cacheable_until(&unreadable, now, now),
+            Freshness::DoNotStore,
+        );
+    }
+
+    #[test]
+    fn an_unusable_age_is_declined_rather_than_assumed_fresh() {
+        let now = Instant::now();
+
+        // Age is a singleton field; two of them leave the real age unknown.
+        assert_eq!(
+            cacheable_until(
+                &headers(&[
+                    ("cache-control", "max-age=300"),
+                    ("age", "60"),
+                    ("age", "90")
+                ]),
+                now,
+                now,
+            ),
+            Freshness::DoNotStore,
+        );
+        assert_eq!(
+            cacheable_until(
+                &headers(&[("cache-control", "max-age=300"), ("age", "not-a-number")]),
+                now,
+                now,
+            ),
+            Freshness::DoNotStore,
+        );
     }
 
     #[test]
