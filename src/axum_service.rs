@@ -13,7 +13,9 @@ use std::task::{Context, Poll};
 use tower::{Layer, Service};
 use tracing::error;
 
-use crate::validate_incoming::{MAuthValidationError, ValidatedRequestDetails};
+use crate::validate_incoming::{
+    AttemptedMAuthIdentity, MAuthValidationError, ValidatedRequestDetails,
+};
 use crate::{
     MAuthInfo,
     config::{ConfigFileSection, ConfigReadError},
@@ -51,12 +53,22 @@ where
                     Ok(response) => Ok(response.into()),
                     Err(err) => Err(err),
                 },
-                Err(err) => {
+                Err(rejection) => {
                     error!(
-                        error = ?err,
+                        error = ?rejection.error,
+                        app_uuid = rejection.app_uuid.map(tracing::field::display),
                         "Failed to validate MAuth signature, rejecting request"
                     );
-                    Ok(StatusCode::UNAUTHORIZED.into_response())
+                    let mut response = StatusCode::UNAUTHORIZED.into_response();
+                    // The request is gone by the time we reject it, so the
+                    // claimed identity rides out on the response instead, for
+                    // any logging layer sitting outside this one.
+                    if let Some(app_uuid) = rejection.app_uuid {
+                        response
+                            .extensions_mut()
+                            .insert(AttemptedMAuthIdentity { app_uuid });
+                    }
+                    Ok(response)
                 }
             }
         })

@@ -180,6 +180,33 @@ from there in order to take further actions based on the error type. This error 
 implements Axum's `OptionalFromRequestParts`, so you can more easily retrieve it using
 `Option<MAuthValidationError>` anywhere that supports extractors.
 
+Both layers also record the app UUID that the rejected request *claimed*, as an
+`AttemptedMAuthIdentity`, so a rejection can be attributed to a caller. The Required layer
+attaches it to the 401 **response** extensions, since the request itself is gone by that
+point; the Optional layer attaches it to the **request** extensions alongside the error.
+It is included on the logged error either way.
+
+`AttemptedMAuthIdentity` is deliberately a separate type from `ValidatedRequestDetails`,
+and it is not an authenticated identity — it is read straight off the signature header of
+a request that failed to validate, so anyone could have sent it. Use it for logging and
+diagnostics; anything making a trust decision must use `ValidatedRequestDetails`.
+
+### Public Key Caching
+
+Verifying an incoming signature needs the sending app's public key, which is fetched from
+MAuth and then cached in process. Entries expire according to the `Cache-Control` headers
+on MAuth's own response, so rotating an application's key takes effect within the lifetime
+MAuth states, without restarting anything. A response arriving without a usable directive
+is cached for 60 seconds, matching the MAuth service's own default, so that MAuth does not
+become a synchronous dependency of every authenticated request. Lookups that MAuth answers
+with a 404 are not cached at all, so an app registered moments ago authenticates
+immediately.
+
+The cache holds 10,000 keys by default, evicting the least recently used, which is sized
+for a service with a wide range of callers rather than a handful. Set
+`pubkey_cache_capacity` on the `ConfigFileSection` to change it. As with the shared HTTP
+client, only the first configuration loaded in a process takes effect.
+
 ### OpenTelemetry Integration
 
 There are also optional features `tracing-otel-26` through `tracing-otel-31`

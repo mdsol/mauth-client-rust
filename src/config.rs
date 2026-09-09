@@ -60,6 +60,9 @@ impl MAuthInfo {
             signer: Signer::new(section.app_uuid.clone(), pk_data.unwrap())?,
         };
 
+        #[cfg(feature = "axum-service")]
+        crate::init_pubkey_cache(section.pubkey_cache_capacity);
+
         CLIENT.get_or_init(|| {
             let builder = ClientBuilder::new(Client::new()).with(mauth_info.clone());
             #[cfg(any(
@@ -89,6 +92,13 @@ pub struct ConfigFileSection {
     pub private_key_data: Option<String>,
     pub v2_only_sign_requests: Option<bool>,
     pub v2_only_authenticate: Option<bool>,
+    /// How many verifying keys to retain when validating incoming requests.
+    /// `None` uses a default sized for a wide-fanout service; raise it only if
+    /// more distinct applications than that call this service within the
+    /// lifetime MAuth puts on a key. Ignored without the `axum-service` feature.
+    ///
+    /// Only the first configuration loaded in a process takes effect.
+    pub pubkey_cache_capacity: Option<usize>,
 }
 
 impl Default for ConfigFileSection {
@@ -101,6 +111,7 @@ impl Default for ConfigFileSection {
             private_key_data: None,
             v2_only_sign_requests: Some(true),
             v2_only_authenticate: Some(true),
+            pubkey_cache_capacity: None,
         }
     }
 }
@@ -155,6 +166,7 @@ mod test {
             private_key_data: None,
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
+            pubkey_cache_capacity: None,
         };
         let load_result = MAuthInfo::from_config_section(&bad_config);
         assert!(matches!(load_result, Err(ConfigReadError::InvalidUri(_))));
@@ -170,6 +182,7 @@ mod test {
             private_key_data: None,
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
+            pubkey_cache_capacity: None,
         };
         let load_result = MAuthInfo::from_config_section(&bad_config);
         assert!(matches!(
@@ -190,6 +203,7 @@ mod test {
             private_key_data: None,
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
+            pubkey_cache_capacity: None,
         };
         let load_result = MAuthInfo::from_config_section(&bad_config);
         fs::remove_file(&filename).await.unwrap();
@@ -211,6 +225,7 @@ mod test {
             private_key_data: None,
             v2_only_sign_requests: None,
             v2_only_authenticate: None,
+            pubkey_cache_capacity: None,
         };
         let load_result = MAuthInfo::from_config_section(&bad_config);
         fs::remove_file(&filename).await.unwrap();
