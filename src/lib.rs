@@ -13,9 +13,8 @@ use crate::validate_incoming::{DEFAULT_PUBKEY_CACHE_CAPACITY, PubkeyCache};
 /// This is the primary struct of this class. It contains all of the information
 /// required to sign requests using the MAuth protocol and verify the responses.
 ///
-/// The cache of keys used to verify incoming signatures is process-wide rather than held
-/// here, so this struct stays cheap to clone -- which matters, because the validation
-/// services clone it for every request they handle.
+/// The cache of keys used to verify incoming signatures is process-wide and is
+/// shared by all instances of this struct.
 #[derive(Clone)]
 pub struct MAuthInfo {
     app_id: Uuid,
@@ -37,10 +36,10 @@ static PUBKEY_CACHE: OnceLock<PubkeyCache> = OnceLock::new();
 
 /// The process-wide cache of verifier keys fetched from MAuth.
 ///
-/// Deliberately global rather than a field on [`MAuthInfo`]:
-/// `RequiredMAuthValidationService::call` clones its `MAuthInfo` for *every*
-/// request, and that `Clone` impl rebuilds the struct from config, so a
-/// per-instance cache would never survive to see a second lookup.
+/// The validation services clone themselves for every request. Their custom
+/// `Clone` implementations rebuild `MAuthInfo` from configuration; `MAuthInfo`
+/// itself derives `Clone`. Keeping the cache global preserves entries across
+/// those service clones without changing the existing service implementation.
 ///
 /// Falls back to [`DEFAULT_PUBKEY_CACHE_CAPACITY`] if a lookup somehow happens
 /// before any config has been loaded.

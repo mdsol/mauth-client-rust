@@ -15,11 +15,9 @@ use uuid::Uuid;
 /// How many verifier keys are retained before the least recently used is
 /// dropped.
 ///
-/// This crate is used by every MAuth-authenticating service, so this is sized
-/// for a wide-fanout gateway rather than a small API. Entries cost roughly a
-/// kilobyte each, and only apps that actually call the service occupy one --
-/// lookups that MAuth answers with a 404 are never stored -- so the cache
-/// cannot be grown by an unregistered caller. Override with
+/// This default accommodates services with many distinct callers. Only
+/// successful public-key lookups create entries; 404 responses are not cached.
+/// Override with
 /// `ConfigFileSection::pubkey_cache_capacity` where the default does not fit.
 pub(crate) const DEFAULT_PUBKEY_CACHE_CAPACITY: usize = 10_000;
 
@@ -466,8 +464,8 @@ fn expires_after(now: Instant, lifetime: Duration) -> Freshness {
 ///
 /// Both bounds matter. The expiry is the point: without it a key rotation
 /// leaves every long-lived process rejecting the rotated app forever. The
-/// capacity is a safety net -- entries can only be created for registered apps
-/// that actually call this service, since failed lookups are never stored.
+/// capacity limits memory use, since expired entries are removed lazily and
+/// successful lookups can introduce additional application UUIDs.
 pub(crate) struct PubkeyCache(Mutex<LruCache<Uuid, (Verifier, Instant)>>);
 
 impl PubkeyCache {
@@ -536,10 +534,251 @@ pub enum MAuthValidationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::axum_service::{OptionalMAuthValidationLayer, RequiredMAuthValidationLayer};
+    use crate::config::ConfigFileSection;
+    use axum::{Router, routing::get};
     use http::HeaderName;
+    use rsa::{
+        RsaPrivateKey,
+        pkcs1::EncodeRsaPrivateKey,
+        pkcs8::{EncodePublicKey, LineEnding},
+        rand_core::OsRng,
+    };
+    use std::sync::{
+        Arc, LazyLock, RwLock,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tower::{Layer, Service};
 
     const APP_UUID: &str = "66de0549-f7ea-4f17-9984-10643f3357d1";
     const OTHER_UUID: &str = "b0021882-1049-495d-99d7-9df99a78c0e0";
+
+    // Generate disposable test keys in memory; no credentials are persisted.
+    static TEST_KEYS: LazyLock<[(String, String); 2]> = LazyLock::new(|| {
+        std::array::from_fn(|_| {
+            let key = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+            let public = key
+                .to_public_key()
+                .to_public_key_pem(LineEnding::LF)
+                .unwrap();
+            let private = key.to_pkcs1_pem(LineEnding::LF).unwrap().to_string();
+            (private, public)
+        })
+    });
+
+    fn test_config(app_uuid: Uuid, base_url: &str, key_index: usize) -> ConfigFileSection {
+        ConfigFileSection {
+            app_uuid: app_uuid.to_string(),
+            mauth_baseurl: base_url.to_owned(),
+            private_key_data: Some(TEST_KEYS[key_index].0.clone()),
+            ..ConfigFileSection::default()
+        }
+    }
+
+    fn signed_request(signer: &MAuthInfo) -> Request {
+        let mut outgoing = reqwest::Request::new(
+            http::Method::GET,
+            "http://localhost/resource?value=1".parse().unwrap(),
+        );
+        signer.sign_request(&mut outgoing).unwrap();
+        let mut incoming = Request::builder()
+            .uri("/resource?value=1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        *incoming.headers_mut() = outgoing.headers().clone();
+        incoming
+    }
+
+    #[tokio::test]
+    async fn expired_key_is_refetched_and_validates_a_rotated_signature() {
+        let app_uuid = Uuid::new_v4();
+        let served_key = Arc::new(RwLock::new(TEST_KEYS[0].1.clone()));
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let endpoint = Router::new().route(
+            &format!("/mauth/v1/security_tokens/{app_uuid}"),
+            get({
+                let served_key = Arc::clone(&served_key);
+                let fetches = Arc::clone(&fetches);
+                move || {
+                    let public_key = served_key.read().unwrap().clone();
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        (
+                            [(header::CACHE_CONTROL, "max-age=300")],
+                            axum::Json(serde_json::json!({
+                                "security_token": { "public_key_str": public_key }
+                            })),
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, endpoint).await.unwrap() });
+        let original =
+            MAuthInfo::from_config_section(&test_config(app_uuid, &base_url, 0)).unwrap();
+        let rotated = MAuthInfo::from_config_section(&test_config(app_uuid, &base_url, 1)).unwrap();
+
+        for _ in 0..2 {
+            let validated = original
+                .validate_request(signed_request(&original))
+                .await
+                .ok()
+                .unwrap();
+            assert_eq!(
+                validated
+                    .extensions()
+                    .get::<ValidatedRequestDetails>()
+                    .unwrap()
+                    .app_uuid,
+                app_uuid
+            );
+            assert!(
+                validated
+                    .extensions()
+                    .get::<AttemptedMAuthIdentity>()
+                    .is_none()
+            );
+        }
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+
+        *served_key.write().unwrap() = TEST_KEYS[1].1.clone();
+        let rejection = original
+            .validate_request(signed_request(&rotated))
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            rejection.error,
+            MAuthValidationError::SignatureVerifyFailure
+        ));
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+
+        // Advance this entry to its expiry boundary without sleeping or
+        // changing the process-wide cache used by other tests.
+        {
+            let mut cache = pubkey_cache().lock();
+            let (_, expires_at) = cache.get_mut(&app_uuid).unwrap();
+            assert!(*expires_at > Instant::now());
+            *expires_at = Instant::now();
+        }
+        for _ in 0..2 {
+            let validated = original
+                .validate_request(signed_request(&rotated))
+                .await
+                .ok()
+                .unwrap();
+            assert_eq!(
+                validated
+                    .extensions()
+                    .get::<ValidatedRequestDetails>()
+                    .unwrap()
+                    .app_uuid,
+                app_uuid
+            );
+        }
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+        pubkey_cache().lock().pop(&app_uuid);
+        server.abort();
+    }
+
+    fn rejected_request(app_uuid: Uuid, v1: bool) -> Request {
+        let (name, value) = if v1 {
+            (MAUTH_V1_SIGNATURE_HEADER, format!("MWS {app_uuid}:invalid"))
+        } else {
+            (
+                MAUTH_V2_SIGNATURE_HEADER,
+                format!("MWSV2 {app_uuid}:invalid;"),
+            )
+        };
+        // A missing timestamp rejects locally, without a public-key lookup.
+        Request::builder()
+            .uri("/")
+            .header(name, value)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn required_layer_exposes_rejected_identity_on_response() {
+        let app_uuid = Uuid::new_v4();
+        let mut config = test_config(app_uuid, "http://127.0.0.1:1", 0);
+        config.v2_only_authenticate = Some(false);
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let inner = Router::new().route(
+            "/",
+            get({
+                let handler_calls = Arc::clone(&handler_calls);
+                move || {
+                    handler_calls.fetch_add(1, Ordering::SeqCst);
+                    async { StatusCode::NO_CONTENT }
+                }
+            }),
+        );
+        let mut service = RequiredMAuthValidationLayer::from_config_section(config)
+            .unwrap()
+            .layer(inner);
+        for v1 in [false, true] {
+            let response = service.call(rejected_request(app_uuid, v1)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                response
+                    .extensions()
+                    .get::<AttemptedMAuthIdentity>()
+                    .unwrap()
+                    .app_uuid,
+                app_uuid
+            );
+            assert!(
+                response
+                    .extensions()
+                    .get::<ValidatedRequestDetails>()
+                    .is_none()
+            );
+        }
+        let response = service
+            .call(Request::new(axum::body::Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            response
+                .extensions()
+                .get::<AttemptedMAuthIdentity>()
+                .is_none()
+        );
+        assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn optional_layer_exposes_rejected_identity_and_error_to_handler() {
+        let app_uuid = Uuid::new_v4();
+        let mut config = test_config(app_uuid, "http://127.0.0.1:1", 0);
+        config.v2_only_authenticate = Some(false);
+        let inner = Router::new().route(
+            "/",
+            get(move |req: Request| async move {
+                assert_eq!(
+                    req.extensions()
+                        .get::<AttemptedMAuthIdentity>()
+                        .unwrap()
+                        .app_uuid,
+                    app_uuid
+                );
+                assert!(req.extensions().get::<MAuthValidationError>().is_some());
+                assert!(req.extensions().get::<ValidatedRequestDetails>().is_none());
+                StatusCode::NO_CONTENT
+            }),
+        );
+        let mut service = OptionalMAuthValidationLayer::from_config_section(config)
+            .unwrap()
+            .layer(inner);
+        for v1 in [false, true] {
+            let response = service.call(rejected_request(app_uuid, v1)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        }
+    }
 
     /// Builds a header map, appending rather than replacing so that a repeated
     /// name produces the multiple field lines HTTP allows for list headers.
