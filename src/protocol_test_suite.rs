@@ -30,6 +30,7 @@ async fn setup_mauth_info() -> (MAuthInfo, u64) {
         private_key_data: None,
         v2_only_sign_requests: None,
         v2_only_authenticate: None,
+        pubkey_cache_capacity: None,
     };
     (
         MAuthInfo::from_config_section(&mock_config_section).unwrap(),
