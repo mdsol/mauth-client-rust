@@ -72,6 +72,7 @@ impl MAuthInfo {
                 feature = "tracing-otel-29",
                 feature = "tracing-otel-30",
                 feature = "tracing-otel-31",
+                feature = "tracing-otel-32",
             ))]
             let builder = builder.with(reqwest_tracing::TracingMiddleware::default());
             builder.build()
