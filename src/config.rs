@@ -22,8 +22,14 @@ impl MAuthInfo {
         let mut home = dirs::home_dir().unwrap();
         home.push(CONFIG_FILE);
         let config_data = std::fs::read_to_string(&home)?;
+        Self::config_section_from_yaml(&config_data)
+    }
 
-        let config_data_value: yaml_serde::Value = yaml_serde::from_str(&config_data)?;
+    /// Parse the `common` section out of the YAML contents of a config file.
+    pub(crate) fn config_section_from_yaml(
+        config_data: &str,
+    ) -> Result<ConfigFileSection, ConfigReadError> {
+        let config_data_value: yaml_serde::Value = yaml_serde::from_str(config_data)?;
         let common_section = config_data_value
             .get("common")
             .ok_or(ConfigReadError::InvalidFile(None))?;
@@ -156,6 +162,87 @@ impl From<yaml_serde::Error> for ConfigReadError {
 mod test {
     use super::*;
     use tokio::fs;
+
+    #[test]
+    fn parses_documented_common_section() {
+        let yaml = "\
+common: &common
+  mauth_baseurl: https://mauth.example.com
+  mauth_api_version: v1
+  app_uuid: c7db7fde-2448-11ef-b358-125eb8485a60
+  private_key_file: /path/to/key.pem
+";
+        let section = MAuthInfo::config_section_from_yaml(yaml).unwrap();
+        assert_eq!(section.mauth_baseurl, "https://mauth.example.com");
+        assert_eq!(section.mauth_api_version, "v1");
+        assert_eq!(section.app_uuid, "c7db7fde-2448-11ef-b358-125eb8485a60");
+        assert_eq!(
+            section.private_key_file.as_deref(),
+            Some("/path/to/key.pem")
+        );
+        assert!(section.private_key_data.is_none());
+        assert!(section.v2_only_sign_requests.is_none());
+        assert!(section.v2_only_authenticate.is_none());
+        assert!(section.pubkey_cache_capacity.is_none());
+    }
+
+    #[test]
+    fn parses_optional_fields_and_ignores_other_sections() {
+        let yaml = "\
+common: &common
+  mauth_baseurl: https://mauth.example.com
+  mauth_api_version: v1
+  app_uuid: c7db7fde-2448-11ef-b358-125eb8485a60
+  private_key_data: |
+    -----BEGIN RSA PRIVATE KEY-----
+    not-really-a-key
+    -----END RSA PRIVATE KEY-----
+  v2_only_sign_requests: true
+  v2_only_authenticate: false
+  pubkey_cache_capacity: 42
+development:
+  <<: *common
+  mauth_baseurl: https://mauth-dev.example.com
+";
+        let section = MAuthInfo::config_section_from_yaml(yaml).unwrap();
+        assert_eq!(section.mauth_baseurl, "https://mauth.example.com");
+        assert!(section.private_key_file.is_none());
+        let key = section.private_key_data.unwrap();
+        assert!(key.starts_with("-----BEGIN RSA PRIVATE KEY-----\n"));
+        assert!(key.contains("not-really-a-key"));
+        assert_eq!(section.v2_only_sign_requests, Some(true));
+        assert_eq!(section.v2_only_authenticate, Some(false));
+        assert_eq!(section.pubkey_cache_capacity, Some(42));
+    }
+
+    #[test]
+    fn missing_common_section_returns_right_error() {
+        let yaml = "\
+development:
+  mauth_baseurl: https://mauth.example.com
+  mauth_api_version: v1
+  app_uuid: c7db7fde-2448-11ef-b358-125eb8485a60
+";
+        let result = MAuthInfo::config_section_from_yaml(yaml);
+        assert!(matches!(result, Err(ConfigReadError::InvalidFile(None))));
+    }
+
+    #[test]
+    fn missing_required_field_returns_right_error() {
+        let yaml = "\
+common:
+  mauth_baseurl: https://mauth.example.com
+  mauth_api_version: v1
+";
+        let result = MAuthInfo::config_section_from_yaml(yaml);
+        assert!(matches!(result, Err(ConfigReadError::InvalidFile(Some(_)))));
+    }
+
+    #[test]
+    fn malformed_yaml_returns_right_error() {
+        let result = MAuthInfo::config_section_from_yaml("common: [unterminated");
+        assert!(matches!(result, Err(ConfigReadError::InvalidFile(Some(_)))));
+    }
 
     #[tokio::test]
     async fn invalid_uri_returns_right_error() {
