@@ -23,12 +23,12 @@ impl MAuthInfo {
         home.push(CONFIG_FILE);
         let config_data = std::fs::read_to_string(&home)?;
 
-        let config_data_value: serde_yml::Value = serde_yml::from_slice(&config_data.into_bytes())?;
+        let config_data_value: yaml_serde::Value = yaml_serde::from_str(&config_data)?;
         let common_section = config_data_value
             .get("common")
             .ok_or(ConfigReadError::InvalidFile(None))?;
         let common_section_typed: ConfigFileSection =
-            serde_yml::from_value(common_section.clone())?;
+            yaml_serde::from_value(common_section.clone())?;
         Ok(common_section_typed)
     }
 
@@ -124,7 +124,7 @@ pub enum ConfigReadError {
     #[error("File Read Error: {0}")]
     FileReadError(#[from] io::Error),
     #[error("Not a valid maudit config file: {0:?}")]
-    InvalidFile(Option<serde_yml::Error>),
+    InvalidFile(Option<yaml_serde::Error>),
     #[error("MAudit URI not valid: {0}")]
     InvalidUri(#[from] url::ParseError),
     #[error("App UUID not valid: {0}")]
@@ -146,8 +146,8 @@ impl From<mauth_core::error::Error> for ConfigReadError {
     }
 }
 
-impl From<serde_yml::Error> for ConfigReadError {
-    fn from(err: serde_yml::Error) -> ConfigReadError {
+impl From<yaml_serde::Error> for ConfigReadError {
+    fn from(err: yaml_serde::Error) -> ConfigReadError {
         ConfigReadError::InvalidFile(Some(err))
     }
 }
