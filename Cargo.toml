@@ -1,6 +1,6 @@
 [package]
 name = "mauth-client"
-version = "0.8.0"
+version = "0.8.1"
 authors = ["Mason Gup <mgup@mdsol.com>"]
 edition = "2024"
 rust-version = "1.88"
@@ -16,7 +16,7 @@ categories = ["authentication", "web-programming"]
 [dependencies]
 reqwest = { version = "0.13", features = ["json"] }
 reqwest-middleware = "0.5"
-reqwest-tracing = { version = "0.7.0", optional = true }
+reqwest-tracing = { version = "0.7.1", optional = true }
 async-trait = ">= 0.1.83"
 url = "2"
 serde = { version = "1", features = ["derive"] }
@@ -48,3 +48,4 @@ tracing-otel-28 = ["reqwest-tracing/opentelemetry_0_28"]
 tracing-otel-29 = ["reqwest-tracing/opentelemetry_0_29"]
 tracing-otel-30 = ["reqwest-tracing/opentelemetry_0_30"]
 tracing-otel-31 = ["reqwest-tracing/opentelemetry_0_31"]
+tracing-otel-32 = ["reqwest-tracing/opentelemetry_0_32"]

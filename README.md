@@ -209,7 +209,7 @@ client, only the first configuration loaded in a process takes effect.
 
 ### OpenTelemetry Integration
 
-There are also optional features `tracing-otel-26` through `tracing-otel-31`
+There are also optional features `tracing-otel-26` through `tracing-otel-32`
 that pair with the `axum-service` feature to ensure that any outgoing requests for credentials
 that take place in the context of an incoming web request also include the proper OpenTelemetry
 span information in any requests to MAudit services. Note that it is critical to use the same
