@@ -537,12 +537,12 @@ mod tests {
     use crate::axum_service::{OptionalMAuthValidationLayer, RequiredMAuthValidationLayer};
     use crate::config::ConfigFileSection;
     use axum::{Router, routing::get};
+    use getrandom::SysRng;
     use http::HeaderName;
     use rsa::{
-        RsaPrivateKey,
+        PrivateKey,
         pkcs1::EncodeRsaPrivateKey,
         pkcs8::{EncodePublicKey, LineEnding},
-        rand_core::OsRng,
     };
     use std::sync::{
         Arc, LazyLock, RwLock,
@@ -556,7 +556,7 @@ mod tests {
     // Generate disposable test keys in memory; no credentials are persisted.
     static TEST_KEYS: LazyLock<[(String, String); 2]> = LazyLock::new(|| {
         std::array::from_fn(|_| {
-            let key = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
+            let key = PrivateKey::new(&mut SysRng, 2048).unwrap();
             let public = key
                 .to_public_key()
                 .to_public_key_pem(LineEnding::LF)
